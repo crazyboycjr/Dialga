@@ -76,8 +76,7 @@ RdmaBuffer* RdmaMemory::GetBuffer(size_t size) {
 }
 
 bool RdmaMemory::MatchBuffer(RdmaBuffer* buf) {
-  if (buf->lkey_ == mr_->lkey && buf->rkey_ == mr_->rkey) return true;
-  return false;
+  return (buf->lkey_ == mr_->lkey && buf->rkey_ == mr_->rkey);
 }
 
 void RdmaMemory::ReturnBuffer(RdmaBuffer *buf) {
@@ -114,7 +113,7 @@ int RdmaManager::InitDevice() {
     PLOG(ERROR) << "ibv_query_gid() failed";
     return -1;
   }
-  // All objects in our application should be good. Share pd for all of them.
+  // All objects in our application shouldn't be malicious. Share pd for all of them.
   pd_ = ibv_alloc_pd(ctx_);
   if (!pd_) {
     PLOG(ERROR) << "ibv_alloc_pd() failed";
@@ -191,7 +190,6 @@ int RdmaManager::TcpConnect(std::string host, int port) {
   char* service;
   int n;
   int sockfd = -1;
-  int err;
   if (asprintf(&service, "%d", port) < 0) return -1;
   n = getaddrinfo(host.c_str(), service, &hints, &res);
   if (n < 0) {

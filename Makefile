@@ -2,11 +2,11 @@
 # make clean; GDR=1 make for GDR version
 all = server client
 target = server.o client.o
-objects = rkvstore.o rdmatools.o
-headers = config.hpp kvstore.hpp rdmatools.hpp
+objects = kvstore-rdma.o rdmatools.o
+headers = config.hpp kvstore-rdma.hpp rdmatools.hpp
 CC = g++
 
-CFLAGS = -O3 
+CFLAGS = -O3 -Wall
 LDFLAGS = -libverbs -lglog -lpthread -lgflags
 all: $(all)
 

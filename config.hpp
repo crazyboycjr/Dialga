@@ -43,7 +43,7 @@ constexpr uint16_t kDefaultNumCPUs = 1;
 constexpr int kMaxBatch = 128;
 constexpr int kMaxSge = 16;
 constexpr int kMaxInline = 512;
-constexpr int kMaxCuncur = 48; // At most 48 QPs per server
+constexpr int kMaxConcur = 48; // At most 48 QPs per server
 constexpr int kCqPollDepth = 128;
 
 }  // namespace kvstore
