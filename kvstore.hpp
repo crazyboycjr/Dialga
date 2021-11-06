@@ -11,7 +11,14 @@
 namespace kvstore {
 
 using Key = uint64_t;
-using Value = std::string;
+// using Value = std::string;
+//  TODO: Value is described as the address + size; Since it is pre-registered,
+//  the corresponding lkey and rkey can be easily read.
+class Value {
+ public:
+  uint64_t addr_;
+  size_t size_;
+};
 
 /* \brief: Callback to allow pipeline. */
 using Callback = std::function<void()>;
@@ -37,15 +44,17 @@ class KVStore {
   virtual int Init() = 0;
 
   virtual int Put(const std::vector<Key>& keys,
-                   const std::vector<Value>& values,
-                   const Callback& cb = nullptr) = 0;
+                  const std::vector<Value>& values,
+                  const Callback& cb = nullptr) = 0;
 
   virtual int Get(const std::vector<Key>& keys,
-                   const std::vector<Value*>& values,
-                   const Callback& cb = nullptr) = 0;
+                  const std::vector<Value*>& values,
+                  const Callback& cb = nullptr) = 0;
 
   virtual int Delete(const std::vector<Key>& keys,
-                      const Callback& cb = nullptr) = 0;
+                     const Callback& cb = nullptr) = 0;
+  virtual int Register(char* buf, size_t size, uint32_t* lkey,
+                       uint32_t* rkey) = 0;
 
  protected:
   std::unordered_map<Key, IndexEntry> indexs_;
