@@ -42,6 +42,7 @@ class RdmaMemory {
 class RdmaConnection {
  public:
   RdmaConnection(struct ibv_qp* qp) : qp_(qp) {}
+  void SetIdx(int id) { idx_ = id; }
   struct ibv_qp* GetQp() {
     return qp_;
   }
@@ -49,6 +50,8 @@ class RdmaConnection {
  private:
   struct ibv_qp* qp_;
   int idx_;
+  int send_credits_ = FLAGS_send_wq_depth;
+  int recv_credits_ = FLAGS_recv_wq_depth;
   // TODO: add stats info
 };
 
@@ -58,13 +61,17 @@ class RdmaManager {
   int InitDevice();
   int InitMemory();
   int TcpConnect(std::string host, int port);  // return sockfd on success.
+  // TcpServe sets up the RDMA connection and return the RDMA connection.
+  // But TcpServe will still keeps the TCP connection alive (without response to
+  // client) TcpAck is used to respond to client and close the TCP connection.
   RdmaConnection* TcpServe(int fd);
+  void TcpAck(int fd, struct ibv_qp* qp);
   // Connect to certain host with tcp port "port", set up an RDMA connection and
   // return that back.
   RdmaConnection* Connect(std::string host, int port);
-  RdmaBuffer* GetRdmaBufferByAddr(char *buf);
-  char* AllocateBuffer(size_t size);
-  void FreeBuffer(char* buf);
+  RdmaBuffer* AllocateBuffer(size_t size);
+  void FreeBuffer(RdmaBuffer* buf);
+  struct ibv_mr* RegisterMemory(char* buf, size_t size);
 
  private:
   std::string devname_ = "";
@@ -74,7 +81,6 @@ class RdmaManager {
   std::vector<RdmaMemory*> memory_pools_;
   struct ibv_cq* global_cq_ = nullptr;
   struct ibv_comp_channel* global_channel_ = nullptr;
-  std::unordered_map<uint64_t, RdmaBuffer*> allocated_buffers_;
   class ConnectionMeta {
    public:
     int qp_num;

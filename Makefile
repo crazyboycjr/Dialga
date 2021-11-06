@@ -6,7 +6,7 @@ objects = kvstore-rdma.o rdmatools.o
 headers = config.hpp kvstore-rdma.hpp rdmatools.hpp
 CC = g++
 
-CFLAGS = -O3 -Wall
+CFLAGS = -Wall -g
 LDFLAGS = -libverbs -lglog -lpthread -lgflags
 all: $(all)
 

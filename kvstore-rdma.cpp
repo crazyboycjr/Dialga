@@ -1,16 +1,19 @@
 /*
  * RDMA KVStore Implementation
  */
+#include "kvstore-rdma.hpp"
+
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
 #include <infiniband/verbs.h>
 #include <netdb.h>
+#include <strings.h>
 #include <sys/socket.h>
 
 #include <thread>
 
 #include "config.hpp"
-#include "kvstore-rdma.hpp"
+#include "kvstore.hpp"
 #include "rdmatools.hpp"
 
 namespace kvstore {
@@ -46,10 +49,11 @@ int RdmaKVStore::Init() {
     LOG(ERROR) << "RdmaKVStore::InitDevice() failed";
     return -1;
   }
-  if (manager_->InitMemory()) {
-    LOG(ERROR) << "RdmaKVStore::InitMemory() failed";
-    return -1;
-  }
+  // Client doesn't need to InitMemory()
+  // if (manager_->InitMemory()) {
+  //   LOG(ERROR) << "RdmaKVStore::InitMemory() failed";
+  //   return -1;
+  // }
   auto hostvec = GetHostList(FLAGS_connect);
   for (auto host : hostvec) {
     std::string hostname;
@@ -62,8 +66,61 @@ int RdmaKVStore::Init() {
       return -1;
     }
     connections_.push_back(conn);
+    conn->SetIdx(connections_.size());
   }
+  // Create a pooling thread to handle the poll;
+  // There should be ONLY ONE polling thread.
+  polling_thread_ = std::thread(&RdmaKVStore::Poll, this);
+  polling_thread_.detach();
+  LOG(INFO) << "Polling thread starts to busy-polling!";
   return 0;
+}
+
+void RdmaKVStore::Poll() {
+  while (true) {
+    for (auto conn : connections_) {
+      auto cq =
+          conn->GetQp()
+              ->send_cq;  // NOTICE: we use the same cq for both send/recv.
+      int n = 1;
+      while (n > 0) {
+        struct ibv_wc wc[kCqPollDepth];
+        n = ibv_poll_cq(cq, kCqPollDepth, wc);
+        if (n < 0) {
+          PLOG(ERROR) << "ibv_poll_cq() failed";
+          return;
+        }
+        for (int i = 0; i < n; i++) {
+          LOG(INFO) << "Completion generated.";
+          if (wc[i].status != IBV_WC_SUCCESS) {
+            LOG(ERROR) << "Got bad completion status with " << wc[i].status;
+            // TODO: maybe error handling here
+            return;
+          }
+          auto wr_context = (WrContext*)(wc[i].wr_id);
+          switch (wc[i].opcode) {
+            case IBV_WC_RDMA_WRITE:
+            case IBV_WC_RDMA_READ:
+            // TODO: more logics for v2
+            case IBV_WC_SEND:
+              wr_context->ref_--;
+              if (wr_context->ref_ == 0) {
+                if (wr_context->cb_) wr_context->cb_();
+                delete wr_context;
+              }
+              break;
+            case IBV_WC_RECV:
+              // TODO: PUT the recv buffer value to the user's designated
+              // address
+              break;
+            default:
+              LOG(ERROR) << "Other Ops are not supported. Must be error.";
+              break;
+          }
+        }
+      }
+    }
+  }
 }
 
 int RdmaKVStore::Get(const std::vector<Key>& keys,
@@ -73,6 +130,89 @@ int RdmaKVStore::Get(const std::vector<Key>& keys,
 
 int RdmaKVStore::Put(const std::vector<Key>& keys,
                      const std::vector<Value>& values, const Callback& cb) {
+  if (keys.size() != values.size()) {
+    LOG(ERROR) << "Put() failed due to size mismatch (key & value)";
+    return -1;
+  }
+  auto wr_context = new WrContext(0, cb);
+  int to_post = keys.size();
+  struct ibv_send_wr wr_list[kMaxConnection][kMaxBatch];
+  struct ibv_send_wr* bad_wr;
+  struct ibv_sge sgs[kMaxConnection][kMaxBatch];
+  int wr_index[kMaxConnection];
+  memset(wr_index, 0, sizeof(wr_index));
+  memset(wr_list, 0, sizeof(wr_list));
+  memset(sgs, 0, sizeof(sgs));
+  int i = 0;
+  while (i < to_post) {
+    // Get the QP(connection) idx.
+    auto key_index = indexs_.find(keys[i]);
+    int conn_idx;
+    if (key_index == indexs_.end()) {  // New key;
+      conn_idx = i % connections_.size();
+      IndexEntry newentry(conn_idx, 0, values[i].size_);
+      indexs_.insert({keys[i], newentry});
+    } else
+      conn_idx = key_index->second.qp_index_;
+    // Generate WR at right position
+    int wr_position = wr_index[conn_idx];
+    wr_index[conn_idx]++;
+    char* buffer = (char*)values[i].addr_;
+    TxMessage* msg_buffer = (TxMessage*)(buffer + values[i].size_);
+    auto iter = memory_regions_.find(values[i].addr_);
+    if (iter == memory_regions_.end()) {
+      LOG(ERROR) << "Values are not registered.";
+      return -1;
+    }
+    msg_buffer->key_ = keys[i];
+    msg_buffer->opcode_ = KV_PUT;
+    sgs[conn_idx][wr_position].addr = values[i].addr_;
+    sgs[conn_idx][wr_position].length = values[i].size_ + sizeof(TxMessage);
+    if (sgs[conn_idx][wr_position].length < iter->second->length) {
+      LOG(ERROR) << "Value's length exceed registered buffer size";
+      return -1;
+    }
+    // Message Format: [real value][control message]
+    sgs[conn_idx][wr_position].lkey = iter->second->lkey;
+    wr_list[conn_idx][wr_position].num_sge = 1;
+    wr_list[conn_idx][wr_position].sg_list = &sgs[conn_idx][wr_position];
+    wr_list[conn_idx][wr_position].opcode = IBV_WR_SEND;
+    i++;
+    if (wr_index[conn_idx] == kMaxBatch) {
+      // This batch should be sent out
+      wr_list[conn_idx][wr_position].next = nullptr;
+      wr_list[conn_idx][wr_position].send_flags = IBV_SEND_SIGNALED;
+      wr_list[conn_idx][wr_position].wr_id = (uint64_t)wr_context;
+      wr_context->ref_++;
+      if (ibv_post_send(connections_[conn_idx]->GetQp(), wr_list[conn_idx],
+                        &bad_wr)) {
+        PLOG(ERROR) << "ibv_post_send() for non-last batch failed.";
+        return -1;
+      }
+      wr_index[conn_idx] = 0;
+      memset(wr_list[conn_idx], 0, sizeof(wr_list[conn_idx]));
+      // no need to memset sgs because sgs's value will always be filled.
+    } else if (i != to_post) {
+      wr_list[conn_idx][wr_position].next =
+          &wr_list[conn_idx][wr_index[conn_idx]];
+      wr_list[conn_idx][wr_position].send_flags = 0;
+    }
+  }
+  // The last batch for each connection.
+  for (size_t j = 0; j < connections_.size(); j++) {
+    if (wr_index[j] > 0) {
+      // there is to flush
+      wr_list[j][wr_index[j] - 1].next = nullptr;
+      wr_list[j][wr_index[j] - 1].send_flags = IBV_SEND_SIGNALED;
+      wr_list[j][wr_index[j] - 1].wr_id = (uint64_t)wr_context;
+    }
+    wr_context->ref_++;
+    if (ibv_post_send(connections_[j]->GetQp(), wr_list[j], &bad_wr)) {
+      PLOG(ERROR) << "ibv_post_send() failed for last batch";
+      return -1;
+    }
+  }
+  LOG(INFO) << "PUT finished";
   return 0;
 }
 
@@ -80,56 +220,25 @@ int RdmaKVStore::Delete(const std::vector<Key>& keys, const Callback& cb) {
   return 0;
 }
 
-char* RdmaKVStore::RdmaMalloc(size_t size) {
-    auto ret = manager_->AllocateBuffer(size);
-    return ret;
-}
-
-void RdmaKVStore::RdmaFree(char *buf) {
-    if (!buf) return;
-    manager_->FreeBuffer(buf);
-}
-
-int RdmaKVStore::FakePost(char *buf) {
-    auto qp = connections_[0]->GetQp();
-    auto rdma_buffer = manager_->GetRdmaBufferByAddr(buf);
-    struct ibv_send_wr wr_list[kMaxBatch];
-    struct ibv_sge sgs[kMaxBatch][kMaxSge];
-    for (uint32_t i = 0; i < 1; i++) {
-        sgs[i][0].addr = rdma_buffer->addr_;
-        sgs[i][0].length = rdma_buffer->size_;
-        sgs[i][0].lkey = rdma_buffer->lkey_;
-        memset(&wr_list[i], 0, sizeof(struct ibv_send_wr));
-        wr_list[i].num_sge = 1;
-        wr_list[i].opcode = IBV_WR_SEND;
-        wr_list[i].send_flags = IBV_SEND_SIGNALED;
-        wr_list[i].wr_id = 0;
-        wr_list[i].sg_list = sgs[i];
-        wr_list[i].next = nullptr;
-    }
-    struct ibv_send_wr *bad_wr = nullptr;
-    if (ibv_post_send(qp, wr_list, &bad_wr)) {
-        PLOG(ERROR) << "ibv_post_send() failed";
-        return -1;
-    }
-    LOG(INFO) << "ibv_post_send() succeed";
-    struct ibv_wc wc[kCqPollDepth];
-    // For test. Real applications should return here.
-    while (true) {
-        int n = ibv_poll_cq(qp->send_cq, kCqPollDepth, wc);
-        if (n < 0) {
-            PLOG(ERROR) << "ibv_poll_cq() failed";
-            return -1;
-        }
-        for (int i = 0; i < n; i++) {
-            LOG(INFO) << "Completion received.";
-            if (wc[i].status != IBV_WC_SUCCESS) {
-                LOG(ERROR) << "Got bad completion status with " << wc[i].status;
-                return -1;
-            }
-        }
-    }
+int RdmaKVStore::Register(char* buf, size_t size, uint32_t* lkey,
+                          uint32_t* rkey) {
+  if (!buf) {
+    LOG(ERROR) << "Register nullptr. Failed.";
+    return -1;
+  }
+  auto iter = memory_regions_.find((uint64_t)buf);
+  if (iter != memory_regions_.end()) {
+    // This memory has been registered before.
+    *lkey = iter->second->lkey;
+    *rkey = iter->second->rkey;
     return 0;
+  }
+  auto mr = manager_->RegisterMemory(buf, size);
+  if (!mr) return -1;
+  *lkey = mr->lkey;
+  *rkey = mr->rkey;
+  memory_regions_.insert({(uint64_t)buf, mr});
+  return 0;
 }
 
 int RdmaKVServer::Init() {
@@ -207,6 +316,44 @@ int RdmaKVServer::TcpListen() {
 int RdmaKVServer::AcceptHander(int fd, int idx) {
   RdmaConnection* conn = manager_->TcpServe(fd);
   connections_[idx] = conn;
+  conn->SetIdx(idx);
+  int to_post = fLI::FLAGS_recv_wq_depth;
+  while (to_post > 0) {
+    int batch_size = std::min(to_post, kMaxBatch);
+    if (PostRecvBatch(idx, batch_size) < 0) {
+      LOG(ERROR) << "PostRecvBatch() failed";
+      return -1;
+    }
+    to_post -= batch_size;
+  }
+  manager_->TcpAck(fd, conn->GetQp());
+  return 0;
+}
+
+// n should be strictly less than kMaxBatch
+int RdmaKVServer::PostRecvBatch(int conn_id, int n) {
+  struct ibv_sge sg[kMaxBatch];
+  struct ibv_recv_wr wr[kMaxBatch];
+  struct ibv_recv_wr* bad_wr;
+  for (int i = 0; i < n; i++) {
+    auto rdma_buffer = manager_->AllocateBuffer(FLAGS_buf_size);
+    sg[i].addr = rdma_buffer->addr_;
+    sg[i].length = rdma_buffer->size_;
+    sg[i].lkey = rdma_buffer->lkey_;
+    memset(&wr[i], 0, sizeof(struct ibv_recv_wr));
+    wr[i].num_sge = 1;
+    wr[i].sg_list = &sg[i];
+    wr[i].next = (i == n - 1) ? nullptr : &wr[i + 1];
+    ServerWrContext* wr_context = new ServerWrContext;
+    wr_context->conn_id_ = conn_id;
+    wr_context->rdma_buffer_ = rdma_buffer;
+    wr[i].wr_id = (uint64_t)wr_context;
+  }
+  if (auto ret = ibv_post_recv(connections_[conn_id]->GetQp(), wr, &bad_wr)) {
+    PLOG(ERROR) << "ibv_post_recv() failed";
+    LOG(ERROR) << "Return value is " << ret;
+    return -1;
+  }
   return 0;
 }
 

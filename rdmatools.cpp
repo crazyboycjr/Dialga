@@ -79,9 +79,7 @@ bool RdmaMemory::MatchBuffer(RdmaBuffer* buf) {
   return (buf->lkey_ == mr_->lkey && buf->rkey_ == mr_->rkey);
 }
 
-void RdmaMemory::ReturnBuffer(RdmaBuffer *buf) {
-  buffers_.push(buf);
-}
+void RdmaMemory::ReturnBuffer(RdmaBuffer* buf) { buffers_.push(buf); }
 
 int RdmaManager::InitDevice() {
   struct ibv_device* dev = nullptr;
@@ -113,7 +111,8 @@ int RdmaManager::InitDevice() {
     PLOG(ERROR) << "ibv_query_gid() failed";
     return -1;
   }
-  // All objects in our application shouldn't be malicious. Share pd for all of them.
+  // All objects in our application shouldn't be malicious. Share pd for all of
+  // them.
   pd_ = ibv_alloc_pd(ctx_);
   if (!pd_) {
     PLOG(ERROR) << "ibv_alloc_pd() failed";
@@ -148,37 +147,33 @@ int RdmaManager::InitMemory() {
   return 0;
 }
 
-char* RdmaManager::AllocateBuffer(size_t size) {
-  char* ret = nullptr;
+RdmaBuffer* RdmaManager::AllocateBuffer(size_t size) {
   for (auto buffers : memory_pools_) {
     auto buf = buffers->GetBuffer(size);
-    if (buf) {
-      // allocate success
-      ret = (char*)buf->addr_;
-      allocated_buffers_.insert({buf->addr_, buf});
-      break;
-    }
+    if (buf) return buf;
+    // allocate success
   }
-  return ret;
+  return nullptr;
 }
 
-void RdmaManager::FreeBuffer(char* buf) {
-  auto iter = allocated_buffers_.find(uint64_t(buf));
-  if (iter == allocated_buffers_.end()) return;
-  auto rdma_buffer = iter->second;
+void RdmaManager::FreeBuffer(RdmaBuffer* rdma_buffer) {
   for (auto buffers : memory_pools_) {
     if (buffers->MatchBuffer(rdma_buffer)) {
       buffers->ReturnBuffer(rdma_buffer);
-      allocated_buffers_.erase(iter);
       break;
     }
   }
 }
 
-RdmaBuffer* RdmaManager::GetRdmaBufferByAddr(char *buf) {
-  auto iter = allocated_buffers_.find(uint64_t(buf));
-  if (iter == allocated_buffers_.end()) return nullptr;
-  return iter->second;
+struct ibv_mr* RdmaManager::RegisterMemory(char* buf, size_t size) {
+  int mrflags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
+                IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+  auto mr = ibv_reg_mr(pd_, buf, size, mrflags);
+  if (!mr) {
+    PLOG(ERROR) << "ibv_reg_mr() failed";
+    return nullptr;
+  }
+  return mr;
 }
 
 int RdmaManager::TcpConnect(std::string host, int port) {
@@ -279,6 +274,9 @@ RdmaConnection* RdmaManager::Connect(std::string host, int port) {
     goto out;
   }
   // 5. QP now is ready.
+  LOG(INFO) << "The CQ is " << cq;
+  LOG(INFO) << "qp->send_cq is " << qp->send_cq;
+  LOG(INFO) << "qp->recv_cq is " << qp->recv_cq;
   conn = new RdmaConnection(qp);
 out:
   close(fd);
@@ -307,6 +305,9 @@ RdmaConnection* RdmaManager::TcpServe(int fd) {
     PLOG(ERROR) << "ibv_create_qp() failed";
     return nullptr;
   }
+  LOG(INFO) << "The CQ is " << cq;
+  LOG(INFO) << "qp->send_cq is " << qp->send_cq;
+  LOG(INFO) << "qp->recv_cq is " << qp->recv_cq;
   // 3. Read from the fd and set up connection.
   ConnectionMeta metadata_;
   int n;
@@ -334,17 +335,21 @@ RdmaConnection* RdmaManager::TcpServe(int fd) {
     PLOG(ERROR) << "Failed to modify QP to RTS";
     goto out;
   }
-  // 4. If success. Write local info back to the client.
+  conn = new RdmaConnection(qp);
+  return conn;
+out:
+  return nullptr;
+}
+
+void RdmaManager::TcpAck(int fd, struct ibv_qp* qp) {
+  ConnectionMeta metadata_;
   metadata_.qp_num = htonl(qp->qp_num);
   memcpy(&metadata_.gid, &gid_, sizeof(union ibv_gid));
   if (write(fd, &metadata_, sizeof(metadata_)) != sizeof(metadata_)) {
     LOG(ERROR) << "Couldn't send local connection info";
-    goto out;
   }
-  conn = new RdmaConnection(qp);
-out:
   close(fd);
-  return conn;
+  return;
 }
 
 struct ibv_qp_init_attr MakeQpInitAttr(struct ibv_cq* send_cq,
