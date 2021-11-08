@@ -1,6 +1,5 @@
 namespace kvstore {
 
-class Global {
-};
+class Global {};
 
 }  // namespace kvstore
