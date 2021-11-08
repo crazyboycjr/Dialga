@@ -10,10 +10,10 @@ CFLAGS = -Wall -g
 LDFLAGS = -libverbs -lglog -lpthread -lgflags
 all: $(all)
 
-server: $(objects)
+server: server.o $(objects)
 	$(CC) -o server server.cpp $(objects) $(LDFLAGS)
 
-client: $(objects)
+client: client.o $(objects)
 	$(CC) -o client client.cpp $(objects) $(LDFLAGS)
 
 $(objects) : %.o : %.cpp $(headers)

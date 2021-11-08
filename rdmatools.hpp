@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <mutex>
 
 #include "config.hpp"
 
@@ -42,6 +43,12 @@ class RdmaMemory {
 class RdmaConnection {
  public:
   RdmaConnection(struct ibv_qp* qp) : qp_(qp) {}
+  
+  bool AcquireSendCredits(int num);
+  bool AcquireRecvCredits(int num);
+
+  void UpdateSendCredits(int credits); 
+  void UpdateRecvCredits(int credits); 
   void SetIdx(int id) { idx_ = id; }
   struct ibv_qp* GetQp() {
     return qp_;
@@ -50,6 +57,8 @@ class RdmaConnection {
  private:
   struct ibv_qp* qp_;
   int idx_;
+  std::mutex send_credits_mutex_;
+  std::mutex recv_credits_mutex_;
   int send_credits_ = FLAGS_send_wq_depth;
   int recv_credits_ = FLAGS_recv_wq_depth;
   // TODO: add stats info
@@ -79,6 +88,7 @@ class RdmaManager {
   struct ibv_context* ctx_ = nullptr;
   struct ibv_pd* pd_ = nullptr;
   std::vector<RdmaMemory*> memory_pools_;
+  std::mutex memory_lock_;
   struct ibv_cq* global_cq_ = nullptr;
   struct ibv_comp_channel* global_channel_ = nullptr;
   class ConnectionMeta {

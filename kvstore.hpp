@@ -44,8 +44,7 @@ class KVStore {
   virtual int Init() = 0;
 
   virtual int Put(const std::vector<Key>& keys,
-                  const std::vector<Value>& values,
-                  const Callback& cb = nullptr) = 0;
+                  const std::vector<Value>& values) = 0;
 
   virtual int Get(const std::vector<Key>& keys,
                   const std::vector<Value*>& values,
@@ -53,8 +52,7 @@ class KVStore {
 
   virtual int Delete(const std::vector<Key>& keys,
                      const Callback& cb = nullptr) = 0;
-  virtual int Register(char* buf, size_t size, uint32_t* lkey,
-                       uint32_t* rkey) = 0;
+  virtual int Register(char* buf, size_t size) = 0;
 
  protected:
   std::unordered_map<Key, IndexEntry> indexs_;

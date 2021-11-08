@@ -148,21 +148,26 @@ int RdmaManager::InitMemory() {
 }
 
 RdmaBuffer* RdmaManager::AllocateBuffer(size_t size) {
+  RdmaBuffer *buf = nullptr;
+  memory_lock_.lock();
   for (auto buffers : memory_pools_) {
-    auto buf = buffers->GetBuffer(size);
-    if (buf) return buf;
+    buf = buffers->GetBuffer(size);
+    if (buf) break;
     // allocate success
   }
-  return nullptr;
+  memory_lock_.unlock();
+  return buf;
 }
 
 void RdmaManager::FreeBuffer(RdmaBuffer* rdma_buffer) {
+  memory_lock_.lock();
   for (auto buffers : memory_pools_) {
     if (buffers->MatchBuffer(rdma_buffer)) {
       buffers->ReturnBuffer(rdma_buffer);
       break;
     }
   }
+  memory_lock_.unlock();
 }
 
 struct ibv_mr* RdmaManager::RegisterMemory(char* buf, size_t size) {
@@ -447,6 +452,40 @@ struct ibv_qp_attr MakeQpAttr(enum ibv_qp_state state, enum ibv_qp_type qp_type,
       break;
   }
   return attr;
+}
+
+bool RdmaConnection::AcquireSendCredits(int num) {
+  bool ret = false;
+  send_credits_mutex_.lock();
+  if (send_credits_ >= num) {
+    send_credits_ -= num;
+    ret = true;
+  }
+  send_credits_mutex_.unlock();
+  return ret;
+}
+
+bool RdmaConnection::AcquireRecvCredits(int num) {
+  bool ret = false;
+  recv_credits_mutex_.lock();
+  if (recv_credits_ >= num) {
+    recv_credits_ -= num;
+    ret = true;
+  }
+  recv_credits_mutex_.unlock();
+  return ret;
+}
+
+void RdmaConnection::UpdateSendCredits(int credits) {
+  send_credits_mutex_.lock();
+  send_credits_ += credits;
+  send_credits_mutex_.unlock();
+}
+
+void RdmaConnection::UpdateRecvCredits(int credits) {
+  recv_credits_mutex_.lock();
+  recv_credits_ += credits;
+  recv_credits_mutex_.unlock();
 }
 
 }  // namespace kvstore
