@@ -45,7 +45,8 @@ constexpr int kMaxSge = 16;
 constexpr int kMaxInline = 512;
 constexpr int kMaxConcur = 48;      // At most 48 QPs per server
 constexpr int kCqPollDepth = 128;
-constexpr int kMaxConnection = 3;   // At most 3 QPs per client  
+constexpr int kMaxConnection = 3;   // At most 3 QPs per client 
+constexpr int kCtrlMsgSize = 128; 
 
 }  // namespace kvstore
 
