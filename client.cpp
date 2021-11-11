@@ -26,8 +26,8 @@ int main(int argc, char** argv) {
   FLAGS_logtostderr = 1;
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   kvstore::RdmaKVStore client;
-  LOG(INFO) << RandomString();
   client.Init();
+  std::vector<kvstore::Key> key_vec;
   std::vector<char*> buffers;
   std::vector<kvstore::Value> values;
   for (int i = 0; i < 32; i++) {
@@ -41,6 +41,8 @@ int main(int argc, char** argv) {
     v.addr_ = (uint64_t)buffer;
     v.size_ = 61920;
     values.push_back(v);
+    key_vec.push_back(i + 200);
+    LOG(INFO) << "key is " << key_vec[i] << " , value is " << (char*)buffers[i];
   }
   // Register buffer size should be strictly sizeof(TxMessage) larger than
   // value.size
@@ -52,25 +54,18 @@ int main(int argc, char** argv) {
   //   value_vec.push_back(v);
   //   client.Put(key_vec, value_vec);
   //
-  std::vector<kvstore::Key> key_vec;
-  std::vector<kvstore::Value> value_vec;
-  for (int i = 0; i < 32; i++) {
-    key_vec.push_back(200 + i);
-    value_vec.push_back(values[i]);
-    LOG(INFO) << "key is " << key_vec[i] << " , value is " << (char*)buffers[i];
-  }
   std::vector<kvstore::Value*> output_value_vec;
   for (int i = 0; i < 32; i++) {
     output_value_vec.push_back(new kvstore::Value);
   }
-  client.Put(key_vec, value_vec);
+  client.Put(key_vec, values);
   LOG(INFO) << "Client.Put() finished";
   client.Get(key_vec, output_value_vec, GetCallBack);
   while (!ready)
     ;
   for (int i = 0; i < output_value_vec.size(); i++) {
     char* res = (char*)output_value_vec[i]->addr_;
-    LOG(INFO) << "Client.Get() finished, key is " << key_vec[i] << " , result is "
-              << res;
+    LOG(INFO) << "Client.Get() finished, key is " << key_vec[i]
+              << " , result is " << res;
   }
 }
