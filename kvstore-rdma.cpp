@@ -78,6 +78,37 @@ int RdmaKVStore::Init() {
   return 0;
 }
 
+int RdmaKVStore::ProcessPutAck(struct ibv_wc* wc) {
+  // TODO: update local index hashmap for further write & read
+  auto recv_ctx = (RecvWrContext*)wc->wr_id;
+  auto ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_);
+  manager_->FreeBuffer(recv_ctx->rdma_buffer_);
+  connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
+  delete recv_ctx;
+  return 0;
+}
+
+int RdmaKVStore::ProcessGetAck(struct ibv_wc* wc) {
+  auto recv_ctx = (RecvWrContext*)wc->wr_id;
+  auto ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_ + wc->byte_len - sizeof(AckMessage));
+  auto get_ctx = (GetContext*) ack_msg->get_ctx_ptr_;
+  // First, provide the buffer to user
+  get_ctx->value_ptr_->addr_ = recv_ctx->rdma_buffer_->addr_;
+  get_ctx->value_ptr_->size_ = ack_msg->size_;
+  // Second, update recv credits
+  connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
+  // Third, decrease ref_ptr, and check if the callback function should be called.
+  *get_ctx->ref_ptr_ = *get_ctx->ref_ptr_ - 1;
+  if (*get_ctx->ref_ptr_ == 0) {
+    // Call the callback function and destroy the GetContext.
+    get_ctx->cb_();
+    delete get_ctx->ref_ptr_;
+    delete get_ctx;
+  }
+  delete recv_ctx;
+  return 0;
+}
+
 void RdmaKVStore::Poll() {
   while (true) {
     for (auto conn : connections_) {
@@ -85,9 +116,7 @@ void RdmaKVStore::Poll() {
           conn->GetQp()
               ->send_cq;  // NOTICE: we use the same cq for both send/recv.
       int n = 1;
-      AckMessage* ack_msg;
       SendWrContext* send_ctx;
-      RecvWrContext* recv_ctx;
       while (n > 0) {
         struct ibv_wc wc[kCqPollDepth];
         n = ibv_poll_cq(cq, kCqPollDepth, wc);
@@ -101,7 +130,6 @@ void RdmaKVStore::Poll() {
             // TODO: maybe error handling here
             return;
           }
-
           switch (wc[i].opcode) {
             case IBV_WC_RDMA_WRITE:
             case IBV_WC_RDMA_READ:
@@ -113,14 +141,21 @@ void RdmaKVStore::Poll() {
               break;
             case IBV_WC_RECV:
               // TODO: PUT the recv buffer value to the user's designated
-              recv_ctx = (RecvWrContext*)wc[i].wr_id;
-              ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_);
-              manager_->FreeBuffer(recv_ctx->rdma_buffer_);
-              connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
-#ifdef DEBUG
-              LOG(INFO) << "Response - key: " << ack_msg->key_
-                        << " , addr: " << ack_msg->addr_;
-#endif
+              switch ((enum KVOpType)ntohl(wc[i].imm_data)) {
+                case KV_PUT:
+                  if (ProcessPutAck(&wc[i])) {
+                    LOG(ERROR) << "ProcessPutAck() failed";
+                  }
+                  break;
+                case KV_GET:
+                  if (ProcessGetAck(&wc[i])) {
+                    LOG(ERROR) << "ProcessGetAck() failed";
+                  }
+                  break;
+                default:
+                  LOG(ERROR) << "Other Type of ack should not be received";
+                  break;
+              }
               break;
             default:
               LOG(ERROR) << "Other Ops are not supported. Must be error.";
@@ -130,11 +165,6 @@ void RdmaKVStore::Poll() {
       }
     }
   }
-}
-
-int RdmaKVStore::Get(const std::vector<Key>& keys,
-                     const std::vector<Value*>& values, const Callback& cb) {
-  return 0;
 }
 
 // n should be strictly less than kMaxBatch
@@ -164,33 +194,30 @@ int RdmaKVStore::PostRecvBatch(int conn_id, int n) {
   return 0;
 }
 
-int RdmaKVStore::Put(const std::vector<Key>& keys,
-                     const std::vector<Value>& values) {
-  // TODO: generate a operation id that denotes this batch
-  if (keys.size() != values.size()) {
-    LOG(ERROR) << "Put() failed due to size mismatch (key & value)";
-    return -1;
-  }
-  // Before posting this PUT, we need to post enough receive requests for ACK
-  // msg.
+int RdmaKVStore::PrepostProcess(const std::vector<Key>& keys,
+                                const std::vector<Value>& values, bool create,
+                                std::vector<int>& output_conn_ids) {
   int to_post = keys.size();
   std::vector<int> wr_per_connection(connections_.size(), 0);
-  std::vector<int> conn_ids;
+  output_conn_ids.clear();
   for (int i = 0; i < to_post; i++) {
     auto key_index = indexs_.find(keys[i]);
     int conn_idx;
     if (key_index == indexs_.end()) {
-      // New key
+      if (!create) {
+        LOG(ERROR) << "GET should only access existing keys";
+        return -1;
+      }
       conn_idx = i % connections_.size();
       IndexEntry newentry(conn_idx, 0, values[i].size_);
       indexs_.insert({keys[i], newentry});
     } else {
       conn_idx = key_index->second.qp_index_;
     }
-    conn_ids.push_back(conn_idx);
+    output_conn_ids.push_back(conn_idx);
     wr_per_connection[conn_idx]++;
   }
-  for (int i = 0; i < wr_per_connection.size(); i++) {
+  for (size_t i = 0; i < wr_per_connection.size(); i++) {
     if (wr_per_connection[i] > 0) {
       bool recv_ready = false, send_ready = false;
       while (true) {
@@ -210,6 +237,104 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
       }
     }
   }
+  return 0;
+}
+
+int RdmaKVStore::Get(const std::vector<Key>& keys,
+                     const std::vector<Value*>& values, const Callback& cb) {
+  if (keys.size() != values.size()) {
+    LOG(ERROR) << "Get() failed due to size mismatch (key & value)";
+    return -1;
+  }
+  int to_post = keys.size();
+  int get_id = get_id_++;
+  std::vector<int> conn_ids;
+  if (PrepostProcess(keys, {}, false, conn_ids)) {
+    LOG(ERROR) << "PrepostProcess for GET failed";
+    return -1;
+  }
+  struct ibv_send_wr wr_list[kMaxConnection][kMaxBatch];
+  struct ibv_send_wr* bad_wr;
+  struct ibv_sge sgs[kMaxConnection][kMaxBatch];
+  int wr_index[kMaxConnection];
+  memset(wr_index, 0, sizeof(wr_index));
+  memset(wr_list, 0, sizeof(wr_list));
+  memset(sgs, 0, sizeof(sgs));
+  int i = 0;
+  int* ref_ptr = new int;
+  *ref_ptr = to_post;
+  while (i < to_post) {
+    // Generate WR at right position
+    int conn_idx = conn_ids[i];
+    int wr_position = wr_index[conn_idx];
+    wr_index[conn_idx]++;
+    auto rdma_buffer = manager_->AllocateBuffer(sizeof(TxMessage));
+    GetContext* get_ctx = new GetContext(ref_ptr, values[i], get_id, i, cb);
+    TxMessage* msg_buffer = (TxMessage*)(rdma_buffer->addr_);
+    msg_buffer->key_ = keys[i];
+    msg_buffer->opcode_ = KV_GET;
+    msg_buffer->get_ctx_ptr_ = (uint64_t)get_ctx;
+    sgs[conn_idx][wr_position].addr = rdma_buffer->addr_;
+    sgs[conn_idx][wr_position].length = sizeof(TxMessage);
+    // Message Format: [[control message]
+    sgs[conn_idx][wr_position].lkey = rdma_buffer->lkey_;
+    wr_list[conn_idx][wr_position].num_sge = 1;
+    wr_list[conn_idx][wr_position].imm_data = htonl((uint32_t)KV_GET);
+    wr_list[conn_idx][wr_position].sg_list = &sgs[conn_idx][wr_position];
+    wr_list[conn_idx][wr_position].opcode = IBV_WR_SEND_WITH_IMM;
+    i++;
+    if (wr_index[conn_idx] == kMaxBatch) {
+      // This batch should be sent out
+      wr_list[conn_idx][wr_position].next = nullptr;
+      wr_list[conn_idx][wr_position].send_flags = IBV_SEND_SIGNALED;
+      SendWrContext* wr_ctx = new SendWrContext(conn_idx, kMaxBatch);
+      wr_list[conn_idx][wr_position].wr_id = (uint64_t)wr_ctx;
+      if (ibv_post_send(connections_[conn_idx]->GetQp(), wr_list[conn_idx],
+                        &bad_wr)) {
+        PLOG(ERROR) << "ibv_post_send() for non-last batch failed.";
+        return -1;
+      }
+      wr_index[conn_idx] = 0;
+      memset(wr_list[conn_idx], 0, sizeof(wr_list[conn_idx]));
+      // no need to memset sgs because sgs's value will always be filled.
+    } else if (i != to_post) {
+      wr_list[conn_idx][wr_position].next =
+          &wr_list[conn_idx][wr_index[conn_idx]];
+      wr_list[conn_idx][wr_position].send_flags = 0;
+    }
+  }
+  // The last batch for each connection.
+  for (size_t j = 0; j < connections_.size(); j++) {
+    if (wr_index[j] > 0) {
+      // there is to flush
+      wr_list[j][wr_index[j] - 1].next = nullptr;
+      wr_list[j][wr_index[j] - 1].send_flags = IBV_SEND_SIGNALED;
+      SendWrContext* wr_ctx = new SendWrContext(j, wr_index[j]);
+      wr_list[j][wr_index[j] - 1].wr_id = (uint64_t)wr_ctx;
+    }
+    if (ibv_post_send(connections_[j]->GetQp(), wr_list[j], &bad_wr)) {
+      PLOG(ERROR) << "ibv_post_send() failed for last batch";
+      return -1;
+    }
+  }
+  return 0;
+}
+
+int RdmaKVStore::Put(const std::vector<Key>& keys,
+                     const std::vector<Value>& values) {
+  // TODO: generate a operation id that denotes this batch
+  if (keys.size() != values.size()) {
+    LOG(ERROR) << "Put() failed due to size mismatch (key & value)";
+    return -1;
+  }
+  // Before posting this PUT, we need to post enough receive requests for ACK
+  // msg.
+  std::vector<int> conn_ids;
+  if (PrepostProcess(keys, values, true, conn_ids)) {
+    LOG(ERROR) << "PrepostProcess for PUT failed";
+    return -1;
+  }
+  int to_post = keys.size();
   struct ibv_send_wr wr_list[kMaxConnection][kMaxBatch];
   struct ibv_send_wr* bad_wr;
   struct ibv_sge sgs[kMaxConnection][kMaxBatch];
@@ -243,7 +368,8 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
     sgs[conn_idx][wr_position].lkey = iter->second->lkey;
     wr_list[conn_idx][wr_position].num_sge = 1;
     wr_list[conn_idx][wr_position].sg_list = &sgs[conn_idx][wr_position];
-    wr_list[conn_idx][wr_position].opcode = IBV_WR_SEND;
+    wr_list[conn_idx][wr_position].opcode = IBV_WR_SEND_WITH_IMM;
+    wr_list[conn_idx][wr_position].imm_data = htonl((uint32_t)KV_PUT);
     i++;
     if (wr_index[conn_idx] == kMaxBatch) {
       // This batch should be sent out
@@ -287,6 +413,7 @@ int RdmaKVStore::Delete(const std::vector<Key>& keys, const Callback& cb) {
 }
 
 int RdmaKVStore::Register(char* buf, size_t size) {
+  size += kCtrlMsgSize;
   if (!buf) {
     LOG(ERROR) << "Register nullptr. Failed.";
     return -1;
@@ -471,11 +598,10 @@ int RdmaKVServer::ProcessRecvCqe(struct ibv_wc* wc) {
   auto rdma_buffer = wr_ctx->rdma_buffer_;
   char* buf = (char*)rdma_buffer->addr_;
   TxMessage* tx_msg = (TxMessage*)(buf + wc->byte_len - sizeof(TxMessage));
-#ifdef DEBUG
-  LOG(INFO) << "ProcessRecvCqe: rdma_buffer size is " << rdma_buffer->size_;
-  LOG(INFO) << "ProcessRecvCqe: wc->byte_len is " << wc->byte_len
-            << " , sizeof(TxMessage) is " << sizeof(TxMessage);
-#endif
+  // LOG(INFO) << "ProcessRecvCqe: rdma_buffer size is " << rdma_buffer->size_;
+  // LOG(INFO) << "ProcessRecvCqe: wc->byte_len is " << wc->byte_len
+  //           << " , sizeof(TxMessage) is " << sizeof(TxMessage);
+  // LOG(INFO) << "The imm_data is " << wc->imm_data << " , ntohl(imm_data) is " << ntohl(wc->imm_data);
   std::unordered_map<uint64_t, StorageEntry*>::iterator iter;
   switch (tx_msg->opcode_) {
     case KV_PUT:
@@ -486,6 +612,10 @@ int RdmaKVServer::ProcessRecvCqe(struct ibv_wc* wc) {
       }
       break;
     case KV_GET:
+      if (ProcessGet(wr_ctx->conn_id_, tx_msg, ntohl(wc->imm_data))) {
+        LOG(ERROR) << "ProcessGet message failed";
+        return -1;
+      }
       break;
     default:
       break;
@@ -503,8 +633,34 @@ int RdmaKVServer::ProcessRecvCqe(struct ibv_wc* wc) {
   return 0;
 }
 
+int RdmaKVServer::ProcessGet(int conn_id, TxMessage* tx_msg,
+                             uint32_t imm_data) {
+  auto iter = storage_.find(tx_msg->key_);
+  if (iter == storage_.end()) {  // This should not happen.
+    LOG(ERROR) << "KEY error: " << tx_msg->key_ << " doesn't exist";
+    return -1;  // TODO: respond back to client
+  }
+  auto entry = iter->second;
+  // Then, send back this entry
+  char* buf = (char*)entry->rdma_buffer_->addr_;
+  AckMessage* ack_msg = (AckMessage*)(buf + entry->value_->size_);
+  ack_msg->addr_ = entry->rdma_buffer_->addr_;
+  ack_msg->get_ctx_ptr_ = tx_msg->get_ctx_ptr_;
+  ack_msg->key_ = tx_msg->key_;
+  ack_msg->rkey_ = entry->rdma_buffer_->rkey_;
+  ack_msg->type_ = KV_ACK_GET;
+  ack_msg->size_ = entry->value_->size_;
+  if (PostSend(conn_id, entry->rdma_buffer_,
+               entry->value_->size_ + sizeof(AckMessage), imm_data)) {
+    LOG(ERROR)
+        << "RdmaKVServer::ProcessGet() failed when PostSend back ACK message";
+    return -1;
+  }
+  return 0;
+}
+
 int RdmaKVServer::ProcessPut(int conn_id, char* msg_buf, size_t msg_size,
-                             TxMessage* tx_msg, uint32_t put_id) {
+                             TxMessage* tx_msg, uint32_t imm_data) {
   auto iter = storage_.find(tx_msg->key_);
   uint64_t addr;
   uint32_t rkey;
@@ -526,19 +682,16 @@ int RdmaKVServer::ProcessPut(int conn_id, char* msg_buf, size_t msg_size,
   auto send_buffer = manager_->AllocateBuffer(sizeof(AckMessage));
   AckMessage* ack_msg = (AckMessage*)send_buffer->addr_;
   ack_msg->addr_ = addr;
-  ack_msg->batch_id_ = put_id;
+  ack_msg->get_ctx_ptr_ = 0;
   ack_msg->key_ = tx_msg->key_;
   ack_msg->rkey_ = rkey;
-  ack_msg->type_ = KV_MSG_PUT;
-  if (PostSend(conn_id, send_buffer, sizeof(AckMessage), htonl(put_id))) {
+  ack_msg->size_ = msg_size;
+  ack_msg->type_ = KV_ACK_PUT;
+  if (PostSend(conn_id, send_buffer, sizeof(AckMessage), imm_data)) {
     LOG(ERROR)
         << "RdmaKVServer::ProcessPut() failed when PostSend back ACK message";
     return -1;
   }
-#ifdef DEBUG
-  LOG(INFO) << "PostSend() accomplished for KEY " << ack_msg->key_ << " ADDR "
-            << ack_msg->addr_ << " RKEY " << ack_msg->rkey_;
-#endif
   return 0;
 }
 

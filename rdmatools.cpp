@@ -7,6 +7,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "config.hpp"
 namespace kvstore {
 
 DEFINE_string(dev, "mlx5_0", "IB device name");
@@ -40,8 +41,10 @@ DEFINE_int32(mtu, IBV_MTU_1024,
                     \t 5 indicates 4096");
 
 size_t RdmaMemory::ShapeSize(size_t size) {
-  if (size <= 65536) return 65536;
-  return 1048576;  // The largest value's size is limited as 1 MB.
+  size_t ret;
+  if (size <= 65536) ret = 65536;
+  ret = 1048576;  // The largest value's size is limited as 1 MB.
+  return (ret + kCtrlMsgSize);
 }
 
 int RdmaMemory::Malloc(int num) {

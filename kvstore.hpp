@@ -31,6 +31,7 @@ class IndexEntry {
   int qp_index_;
   // the virtual addr of the content
   uint64_t addr_;
+  uint32_t rkey_;
   // the size of the content
   size_t size_;
 };
