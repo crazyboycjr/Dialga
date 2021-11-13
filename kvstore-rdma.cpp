@@ -98,7 +98,9 @@ int RdmaKVStore::ProcessGetAck(struct ibv_wc* wc) {
   get_ctx->value_ptr_->size_ = ack_msg->size_;
   // Second, update recv credits
   connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
-  // Third, decrease ref_ptr, and check if the callback function should be
+  // Then, the value's corresponding rdma_buffer is allocated to users.
+  user_hold_buffers_.insert({get_ctx->value_ptr_, recv_ctx->rdma_buffer_});
+  // Lastly, decrease ref_ptr, and check if the callback function should be
   // called.
   *get_ctx->ref_ptr_ = *get_ctx->ref_ptr_ - 1;
   if (*get_ctx->ref_ptr_ == 0) {
@@ -412,6 +414,15 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
 
 int RdmaKVStore::Delete(const std::vector<Key>& keys, const Callback& cb) {
   return 0;
+}
+
+void RdmaKVStore::Free(Value *value) {
+  auto iter = user_hold_buffers_.find(value);
+  if (iter == user_hold_buffers_.end()) return;
+  auto rdma_buffer = iter->second;
+  manager_->FreeBuffer(rdma_buffer);
+  user_hold_buffers_.erase(iter);
+  return ;
 }
 
 int RdmaKVStore::Register(char* buf, size_t size) {

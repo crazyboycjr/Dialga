@@ -37,9 +37,7 @@ int Validation(kvstore::RdmaKVStore* client, int num_of_key, int testnum) {
     strncpy(buffer, val.c_str(), val.size());
     client->Register(buffer, value_length);
     buffers.push_back(buffer);
-    kvstore::Value v;
-    v.addr_ = (uint64_t)buffer;
-    v.size_ = value_length;
+    kvstore::Value v((uint64_t)buffer, value_length);
     values.push_back(v);
     keys.push_back(i);
     LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
@@ -57,7 +55,7 @@ int Validation(kvstore::RdmaKVStore* client, int num_of_key, int testnum) {
     std::vector<kvstore::Value*> test_values;
     int test_key = (random() % num_of_key);
     test_keys.push_back(test_key);
-    test_values.push_back(new kvstore::Value);
+    test_values.push_back(new kvstore::Value(0, 0));
     client->Get(test_keys, test_values, GetCallBack);
     while (!ready)
       ;
@@ -71,6 +69,8 @@ int Validation(kvstore::RdmaKVStore* client, int num_of_key, int testnum) {
                  << buffers[test_key];
       break;
     }
+    client->Free(test_values[0]);
+    delete test_values[0];
   }
   LOG(INFO) << "Testing over....";
   return 0;
@@ -88,9 +88,7 @@ int LatencyTest(kvstore::RdmaKVStore* client, int num_of_key, int iters) {
     strncpy(buffer, val.c_str(), val.size());
     client->Register(buffer, value_length);
     buffers.push_back(buffer);
-    kvstore::Value v;
-    v.addr_ = (uint64_t)buffer;
-    v.size_ = value_length;
+    kvstore::Value v((uint64_t)buffer, value_length);
     values.push_back(v);
     keys.push_back(i);
     LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
@@ -110,7 +108,7 @@ int LatencyTest(kvstore::RdmaKVStore* client, int num_of_key, int iters) {
     std::vector<kvstore::Value*> test_values;
     int test_key = (random() % num_of_key);
     test_keys.push_back(test_key);
-    test_values.push_back(new kvstore::Value);
+    test_values.push_back(new kvstore::Value(0, 0));
     auto before = kvstore::Now64();
     client->Get(test_keys, test_values, GetCallBack);
     while (!ready)
@@ -128,6 +126,8 @@ int LatencyTest(kvstore::RdmaKVStore* client, int num_of_key, int iters) {
                  << buffers[test_key];
       break;
     }
+    client->Free(test_values[0]);
+    delete test_values[0];
   }
   std::sort(latencies.begin(), latencies.end());
   LOG(INFO) << "Min:    " << latencies[0];

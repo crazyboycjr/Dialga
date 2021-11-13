@@ -86,6 +86,8 @@ class RdmaKVStore : public KVStore {
   // TODO: ibv_reg_mr() does not support const char *buf register
   // TODO: When register, allocate size + control message size.
   int Register(char* buf, size_t size);
+  // TODO: int Deregsiter(char* buf, size_t size);
+  void Free(Value* value);
   int Delete(const std::vector<Key>& keys, const Callback& cb = nullptr);
 
  private:
@@ -93,6 +95,7 @@ class RdmaKVStore : public KVStore {
   std::thread polling_thread_;
   std::vector<RdmaConnection*> connections_;
   std::unordered_map<uint64_t, struct ibv_mr*> memory_regions_;
+  std::unordered_map<Value*, RdmaBuffer*> user_hold_buffers_;
   uint32_t get_id_ = 0;
   class SendWrContext {
    public:
@@ -112,7 +115,7 @@ class RdmaKVServer {
  private:
   class StorageEntry {
    public:
-    StorageEntry() { value_ = new Value; }
+    StorageEntry() { value_ = new Value(0, 0); }
     Value* value_;
     RdmaBuffer* rdma_buffer_;
     ~StorageEntry() { delete value_; }
