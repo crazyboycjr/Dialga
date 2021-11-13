@@ -90,18 +90,20 @@ int RdmaKVStore::ProcessPutAck(struct ibv_wc* wc) {
 
 int RdmaKVStore::ProcessGetAck(struct ibv_wc* wc) {
   auto recv_ctx = (RecvWrContext*)wc->wr_id;
-  auto ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_ + wc->byte_len - sizeof(AckMessage));
-  auto get_ctx = (GetContext*) ack_msg->get_ctx_ptr_;
+  auto ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_ + wc->byte_len -
+                               sizeof(AckMessage));
+  auto get_ctx = (GetContext*)ack_msg->get_ctx_ptr_;
   // First, provide the buffer to user
   get_ctx->value_ptr_->addr_ = recv_ctx->rdma_buffer_->addr_;
   get_ctx->value_ptr_->size_ = ack_msg->size_;
   // Second, update recv credits
   connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
-  // Third, decrease ref_ptr, and check if the callback function should be called.
+  // Third, decrease ref_ptr, and check if the callback function should be
+  // called.
   *get_ctx->ref_ptr_ = *get_ctx->ref_ptr_ - 1;
   if (*get_ctx->ref_ptr_ == 0) {
     // Call the callback function and destroy the GetContext.
-    get_ctx->cb_();
+    if (get_ctx->cb_) get_ctx->cb_();
     delete get_ctx->ref_ptr_;
     delete get_ctx;
   }
@@ -601,7 +603,8 @@ int RdmaKVServer::ProcessRecvCqe(struct ibv_wc* wc) {
   // LOG(INFO) << "ProcessRecvCqe: rdma_buffer size is " << rdma_buffer->size_;
   // LOG(INFO) << "ProcessRecvCqe: wc->byte_len is " << wc->byte_len
   //           << " , sizeof(TxMessage) is " << sizeof(TxMessage);
-  // LOG(INFO) << "The imm_data is " << wc->imm_data << " , ntohl(imm_data) is " << ntohl(wc->imm_data);
+  // LOG(INFO) << "The imm_data is " << wc->imm_data << " , ntohl(imm_data) is "
+  // << ntohl(wc->imm_data);
   std::unordered_map<uint64_t, StorageEntry*>::iterator iter;
   switch (tx_msg->opcode_) {
     case KV_PUT:

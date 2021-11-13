@@ -105,6 +105,7 @@ struct ibv_qp_attr MakeQpAttr(enum ibv_qp_state state, enum ibv_qp_type qp_type,
                               int remote_qpn, const union ibv_gid& remote_gid,
                               int* attr_mask);
 
+uint64_t Now64();
 }  // namespace kvstore
 
 #endif  // KVSTORE_KVSTORE_H_

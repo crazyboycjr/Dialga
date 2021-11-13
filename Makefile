@@ -11,10 +11,10 @@ LDFLAGS = -libverbs -lglog -lpthread -lgflags
 all: $(all)
 
 server: server.o $(objects)
-	$(CC) -o server server.cpp $(objects) $(LDFLAGS)
+	$(CC) -o server server.cpp $(objects) $(LDFLAGS) $(CFLAGS)
 
 client: client.o $(objects)
-	$(CC) -o client client.cpp $(objects) $(LDFLAGS)
+	$(CC) -o client client.cpp $(objects) $(LDFLAGS) $(CFLAGS)
 
 $(objects) : %.o : %.cpp $(headers)
 	$(CC) -c $(CFLAGS) $< -o $@

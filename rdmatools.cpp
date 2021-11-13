@@ -7,6 +7,7 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
 #include "config.hpp"
 namespace kvstore {
 
@@ -15,9 +16,9 @@ DEFINE_int32(gid, 3, "IB device gid index");
 DEFINE_int32(mr_num, 1,
              "Initial number of memory regions");  // initial number of mr.
 DEFINE_int32(
-    buf_num, 4096,
+    buf_num, 65536,
     "Initial number of buffer per MR");  // initial number of buffer per mr.
-DEFINE_uint32(buf_size, 65536, "Buffer size each memory chunk");
+DEFINE_uint32(buf_size, 4096, "Buffer size each memory chunk");
 DEFINE_bool(share_cq, true, "All QPs share the same cq");
 DEFINE_bool(event, false, "True if event-based, False for busy-polling");
 DEFINE_int32(cq_depth, 65536, "The depth of Completion Queue");
@@ -42,8 +43,9 @@ DEFINE_int32(mtu, IBV_MTU_1024,
 
 size_t RdmaMemory::ShapeSize(size_t size) {
   size_t ret;
-  if (size <= 65536) ret = 65536;
-  ret = 1048576;  // The largest value's size is limited as 1 MB.
+  if (size <= 4096) ret = 4096;
+  else if (size <= 65536) ret = 65536;
+  else ret = 1048576;  // The largest value's size is limited as 1 MB.
   return (ret + kCtrlMsgSize);
 }
 
@@ -68,6 +70,7 @@ int RdmaMemory::Malloc(int num) {
                                       mr_->lkey, mr_->rkey);
     buffers_.push(rbuf);
   }
+  LOG(INFO) << "Memory registration success: size " << buf_size << " , mr addr " << mr_;
   return 0;
 }
 
@@ -151,7 +154,7 @@ int RdmaManager::InitMemory() {
 }
 
 RdmaBuffer* RdmaManager::AllocateBuffer(size_t size) {
-  RdmaBuffer *buf = nullptr;
+  RdmaBuffer* buf = nullptr;
   memory_lock_.lock();
   for (auto buffers : memory_pools_) {
     buf = buffers->GetBuffer(size);
@@ -159,6 +162,7 @@ RdmaBuffer* RdmaManager::AllocateBuffer(size_t size) {
     // allocate success
   }
   memory_lock_.unlock();
+  // We should promise that buffer is enough
   return buf;
 }
 
@@ -491,4 +495,9 @@ void RdmaConnection::UpdateRecvCredits(int credits) {
   recv_credits_mutex_.unlock();
 }
 
+uint64_t Now64() {
+  struct timespec tv;
+  int res = clock_gettime(CLOCK_REALTIME, &tv);
+  return (uint64_t)tv.tv_sec * 1000000llu + (uint64_t)tv.tv_nsec / 1000;
+}
 }  // namespace kvstore
