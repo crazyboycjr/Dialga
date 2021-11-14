@@ -56,10 +56,21 @@ class AckMessage {
         type_(type) {}
 };
 
-class RecvWrContext {
+class ServerWrContext {
  public:
   int conn_id_;              // qp of this wr is in connections_[conn_id_]
   RdmaBuffer* rdma_buffer_;  // the corresponding RdmaBuffer
+  enum KVOpType optype_;
+};
+
+class ClientWrContext {
+ public:
+  int conn_id_;
+  int ref_;
+  enum KVOpType optype_;
+  std::vector<RdmaBuffer*> *buffers_;
+  ClientWrContext(int conn_id, int ref, enum KVOpType optype, std::vector<RdmaBuffer*> *buffers=nullptr)
+      : conn_id_(conn_id), ref_(ref), optype_(optype), buffers_(buffers) {}
 };
 
 class RdmaKVStore : public KVStore {
@@ -97,12 +108,6 @@ class RdmaKVStore : public KVStore {
   std::unordered_map<uint64_t, struct ibv_mr*> memory_regions_;
   std::unordered_map<Value*, RdmaBuffer*> user_hold_buffers_;
   uint32_t get_id_ = 0;
-  class SendWrContext {
-   public:
-    int conn_id_;
-    int ref_ = 0;
-    SendWrContext(int conn_id, int ref) : conn_id_(conn_id), ref_(ref) {}
-  };
 };
 
 class RdmaKVServer {
@@ -136,6 +141,6 @@ class RdmaKVServer {
                  uint32_t imm_data);
   int ProcessGet(int conn_id, TxMessage* tx_msg, uint32_t imm_data);
   int PostSend(int conn_id, RdmaBuffer* rdma_buffer, size_t size,
-               uint32_t imm_data);
+               uint32_t imm_data, enum KVOpType);
 };
 }  // namespace kvstore

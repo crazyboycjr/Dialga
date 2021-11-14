@@ -18,7 +18,7 @@ DEFINE_int32(mr_num, 1,
 DEFINE_int32(
     buf_num, 65536,
     "Initial number of buffer per MR");  // initial number of buffer per mr.
-DEFINE_uint32(buf_size, 4096, "Buffer size each memory chunk");
+DEFINE_uint32(buf_size, 8000, "Buffer size each memory chunk");
 DEFINE_bool(share_cq, true, "All QPs share the same cq");
 DEFINE_bool(event, false, "True if event-based, False for busy-polling");
 DEFINE_int32(cq_depth, 65536, "The depth of Completion Queue");
@@ -43,15 +43,21 @@ DEFINE_int32(mtu, IBV_MTU_1024,
 
 size_t RdmaMemory::ShapeSize(size_t size) {
   size_t ret;
-  if (size <= 4096) ret = 4096;
-  else if (size <= 65536) ret = 65536;
-  else ret = 1048576;  // The largest value's size is limited as 1 MB.
-  return (ret + kCtrlMsgSize);
+  size = size + kCtrlMsgSize;
+  if (size <= 4096)
+    ret = 4096;
+  else if (size <= 8192)
+    ret = 8192;
+  else if (size <= 65536)
+    ret = 65536;
+  else
+    ret = 1048576;  // The largest value's size is limited as 1 MB.
+  return ret;
 }
 
 int RdmaMemory::Malloc(int num) {
-  size_ = ShapeSize(size_);
-  auto buf_size = size_ * num;
+  int size = ShapeSize(size_);
+  auto buf_size = size * num;
   int mrflags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
                 IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
   char* buffer = nullptr;
@@ -66,15 +72,17 @@ int RdmaMemory::Malloc(int num) {
     return -1;
   }
   for (int i = 0; i < num; i++) {
-    RdmaBuffer* rbuf = new RdmaBuffer((uint64_t)(buffer + size_ * i), size_,
+    RdmaBuffer* rbuf = new RdmaBuffer((uint64_t)(buffer + size * i), size,
                                       mr_->lkey, mr_->rkey);
     buffers_.push(rbuf);
   }
-  LOG(INFO) << "Memory registration success: size " << buf_size << " , mr addr " << mr_;
+  LOG(INFO) << "Memory registration success: size " << buf_size << " , mr addr "
+            << mr_;
   return 0;
 }
 
 RdmaBuffer* RdmaMemory::GetBuffer(size_t size) {
+  if (size > size_) return nullptr;
   if (buffers_.empty()) return nullptr;
   RdmaBuffer* buf = buffers_.front();
   buffers_.pop();
@@ -82,6 +90,9 @@ RdmaBuffer* RdmaMemory::GetBuffer(size_t size) {
 }
 
 bool RdmaMemory::MatchBuffer(RdmaBuffer* buf) {
+  if (buf->lkey_ != mr_->lkey || buf->rkey_ != mr_->rkey) {
+    LOG(ERROR) << "MatchBuffer failed";
+  }
   return (buf->lkey_ == mr_->lkey && buf->rkey_ == mr_->rkey);
 }
 
@@ -134,6 +145,10 @@ int RdmaManager::InitDevice() {
   if (FLAGS_share_cq) {
     global_cq_ =
         ibv_create_cq(ctx_, FLAGS_cq_depth, nullptr, global_channel_, 0);
+    if (ibv_req_notify_cq(global_cq_, 0)) {
+      PLOG(ERROR) << "ibv_req_notify_cq() failed";
+      return -1;
+    }
     if (!global_cq_) {
       PLOG(ERROR) << "ibv_create_cq() failed";
       return -1;
@@ -186,6 +201,23 @@ struct ibv_mr* RdmaManager::RegisterMemory(char* buf, size_t size) {
     return nullptr;
   }
   return mr;
+}
+
+int RdmaManager::WaitForEvent() {
+  struct ibv_cq* ev_cq;
+  void* ev_ctx;
+  int ret = ibv_get_cq_event(global_channel_, &ev_cq, &ev_ctx);
+  if (ret < 0) {
+    PLOG(ERROR) << "ibv_get_cq_event() failed";
+    return -1;
+  }
+  ibv_ack_cq_events(ev_cq, 1);
+  ret = ibv_req_notify_cq(ev_cq, 0);
+  if (ret) {
+    PLOG(ERROR) << "ibv_req_notify_cq() failed";
+    return -1;
+  }
+  return 0;
 }
 
 int RdmaManager::TcpConnect(std::string host, int port) {
@@ -462,37 +494,25 @@ struct ibv_qp_attr MakeQpAttr(enum ibv_qp_state state, enum ibv_qp_type qp_type,
 }
 
 bool RdmaConnection::AcquireSendCredits(int num) {
-  bool ret = false;
-  send_credits_mutex_.lock();
-  if (send_credits_ >= num) {
-    send_credits_ -= num;
-    ret = true;
-  }
-  send_credits_mutex_.unlock();
-  return ret;
+  auto send_credits = send_credits_.load();
+  if (send_credits < num) return false;
+  auto updated_value = send_credits - num;
+  return send_credits_.compare_exchange_strong(send_credits, updated_value);
 }
 
 bool RdmaConnection::AcquireRecvCredits(int num) {
-  bool ret = false;
-  recv_credits_mutex_.lock();
-  if (recv_credits_ >= num) {
-    recv_credits_ -= num;
-    ret = true;
-  }
-  recv_credits_mutex_.unlock();
-  return ret;
+  auto recv_credits = recv_credits_.load();
+  if (recv_credits < num) return false;
+  auto updated_value = recv_credits - num;
+  return recv_credits_.compare_exchange_strong(recv_credits, updated_value);
 }
 
 void RdmaConnection::UpdateSendCredits(int credits) {
-  send_credits_mutex_.lock();
-  send_credits_ += credits;
-  send_credits_mutex_.unlock();
+  send_credits_.fetch_add(credits);
 }
 
 void RdmaConnection::UpdateRecvCredits(int credits) {
-  recv_credits_mutex_.lock();
-  recv_credits_ += credits;
-  recv_credits_mutex_.unlock();
+  recv_credits_.fetch_add(credits);
 }
 
 uint64_t Now64() {

@@ -9,7 +9,7 @@
 #include "kvstore.hpp"
 #include "rdmatools.hpp"
 
-bool ready = false;
+volatile bool ready = false;
 int value_length = 128;
 
 DEFINE_bool(validation, false, "Run validation test?");
@@ -50,11 +50,12 @@ int Validation(kvstore::RdmaKVStore* client, int num_of_key, int testnum) {
     client->Put(put_keys, put_values);
   }
   LOG(INFO) << "Client PUT finished. Starting testing....";
-  for (int i = 0; i < testnum; i++) {
+  LOG(INFO) << "Full Key testing starts: ";
+  for (int i = 0; i < num_of_key; i++) {
     std::vector<kvstore::Key> test_keys;
     std::vector<kvstore::Value*> test_values;
-    int test_key = (random() % num_of_key);
-    test_keys.push_back(test_key);
+    int test_key = i;
+    test_keys.push_back(i);
     test_values.push_back(new kvstore::Value(0, 0));
     client->Get(test_keys, test_values, GetCallBack);
     while (!ready)
@@ -72,6 +73,36 @@ int Validation(kvstore::RdmaKVStore* client, int num_of_key, int testnum) {
     client->Free(test_values[0]);
     delete test_values[0];
   }
+  LOG(INFO) << "Full Key testing over...";
+  LOG(INFO) << "Random Key testing starts:";
+  for (int i = 0; i < testnum; i++) {
+    std::vector<kvstore::Key> test_keys;
+    std::vector<kvstore::Value*> test_values;
+    int test_key = (random() % num_of_key);
+    test_keys.push_back(test_key);
+    test_values.push_back(new kvstore::Value(0, 0));
+    client->Get(test_keys, test_values, GetCallBack);
+    while (!ready)
+      ;
+    char* test_result = (char*)test_values[0]->addr_;
+    if (strncmp(test_result, buffers[test_key], value_length) == 0) {
+      LOG(INFO) << "Test " << i << " (key = " << test_key << ") passed...";
+      ready = false;
+    } else {
+      LOG(ERROR) << "Test " << i << " failed. Key is " << test_key
+                 << "; Read value is " << test_result << " , actual value is "
+                 << buffers[test_key];
+      LOG(ERROR) << "The error result is: ";
+      for (int j = 0; j < value_length; j++) {
+        if (!test_result[j]) break;
+        LOG(INFO) << (int)test_result[j];
+      }
+      break;
+    }
+    client->Free(test_values[0]);
+    delete test_values[0];
+  }
+  LOG(INFO) << "Random Key testing over...";
   LOG(INFO) << "Testing over....";
   return 0;
 }
@@ -113,11 +144,11 @@ int LatencyTest(kvstore::RdmaKVStore* client, int num_of_key, int iters) {
     client->Get(test_keys, test_values, GetCallBack);
     while (!ready)
       ;
+    auto after = kvstore::Now64();
     char* test_result = (char*)test_values[0]->addr_;
     if (strncmp(test_result, buffers[test_key], value_length) == 0) {
-      auto after = kvstore::Now64();
-      LOG(INFO) << "Test " << i << " (key is " << test_key
-                << ") success, latency is " << after - before;
+      // LOG(INFO) << "Test " << i << " (key is " << test_key
+                // << ") success, latency is " << after - before;
       latencies.push_back(after - before);
       ready = false;
     } else {

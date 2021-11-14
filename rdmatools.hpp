@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <vector>
 #include <mutex>
+#include <atomic>
 
 #include "config.hpp"
 
@@ -38,11 +39,16 @@ class RdmaMemory {
   RdmaBuffer* GetBuffer(size_t size);
   void ReturnBuffer(RdmaBuffer* buf);
   bool MatchBuffer(RdmaBuffer* buf);
+  int GetSize() {return buffers_.size();};
 };
 
 class RdmaConnection {
  public:
-  RdmaConnection(struct ibv_qp* qp) : qp_(qp) {}
+  RdmaConnection(struct ibv_qp* qp) : qp_(qp) {
+    send_credits_.store(fLI::FLAGS_send_wq_depth);
+    recv_credits_.store(fLI::FLAGS_recv_wq_depth);
+    LOG(INFO) << "Credits assigned finished. Lock free ? " << send_credits_.is_lock_free();
+  }
   
   bool AcquireSendCredits(int num);
   bool AcquireRecvCredits(int num);
@@ -57,10 +63,10 @@ class RdmaConnection {
  private:
   struct ibv_qp* qp_;
   int idx_;
-  std::mutex send_credits_mutex_;
-  std::mutex recv_credits_mutex_;
-  int send_credits_ = FLAGS_send_wq_depth;
-  int recv_credits_ = FLAGS_recv_wq_depth;
+  std::atomic<int> send_credits_;
+  std::atomic<int> recv_credits_;
+  // int send_credits_ = FLAGS_send_wq_depth;
+  // int recv_credits_ = FLAGS_recv_wq_depth;
   // TODO: add stats info
 };
 
@@ -81,6 +87,7 @@ class RdmaManager {
   RdmaBuffer* AllocateBuffer(size_t size);
   void FreeBuffer(RdmaBuffer* buf);
   struct ibv_mr* RegisterMemory(char* buf, size_t size);
+  int WaitForEvent();
 
  private:
   std::string devname_ = "";
