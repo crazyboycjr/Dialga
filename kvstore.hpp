@@ -18,6 +18,7 @@ class Value {
  public:
   uint64_t addr_;
   size_t size_;
+  Value(uint64_t addr, size_t size) : addr_(addr), size_(size) {}
 };
 
 /* \brief: Callback to allow pipeline. */
