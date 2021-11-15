@@ -1,4 +1,4 @@
-#include "rdmatools.hpp"
+#include "./rdmatools.hpp"
 
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
@@ -8,8 +8,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "config.hpp"
-namespace kvstore {
+#include "dialga/config.hpp"
+
+namespace dialga {
 
 DEFINE_string(dev, "mlx5_0", "IB device name");
 DEFINE_int32(gid, 3, "IB device gid index");
@@ -515,9 +516,4 @@ void RdmaConnection::UpdateRecvCredits(int credits) {
   recv_credits_.fetch_add(credits);
 }
 
-uint64_t Now64() {
-  struct timespec tv;
-  int res = clock_gettime(CLOCK_REALTIME, &tv);
-  return (uint64_t)tv.tv_sec * 1000000llu + (uint64_t)tv.tv_nsec / 1000;
-}
-}  // namespace kvstore
+}  // namespace dialga

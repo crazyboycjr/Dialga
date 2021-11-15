@@ -11,6 +11,12 @@
 
 namespace prism {
 
+inline uint64_t Now64() {
+  struct timespec tv;
+  clock_gettime(CLOCK_REALTIME, &tv);
+  return (uint64_t)tv.tv_sec * 1000000llu + (uint64_t)tv.tv_nsec / 1000;
+}
+
 template <typename... Args>
 inline std::string FormatString(const char* fmt, Args... args) {
   int length = std::snprintf(nullptr, 0, fmt, args...);

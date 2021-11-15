@@ -1,14 +1,12 @@
-#ifndef KVSTORE_KVSTORE_HPP_
-#define KVSTORE_KVSTORE_HPP_
+#ifndef DIALGA_KVSTORE_HPP_
+#define DIALGA_KVSTORE_HPP_
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include "rdmatools.hpp"
-
-namespace kvstore {
+namespace dialga {
 
 using Key = uint64_t;
 // using Value = std::string;
@@ -23,19 +21,6 @@ class Value {
 
 /* \brief: Callback to allow pipeline. */
 using Callback = std::function<void()>;
-
-class IndexEntry {
- public:
-  IndexEntry(int qp_index, uint64_t addr, size_t size)
-      : qp_index_(qp_index), addr_(addr), size_(size) {}
-  // which host(qp) owns the content
-  int qp_index_;
-  // the virtual addr of the content
-  uint64_t addr_;
-  uint32_t rkey_;
-  // the size of the content
-  size_t size_;
-};
 
 class KVStore {
  public:
@@ -54,12 +39,23 @@ class KVStore {
 
   virtual int Delete(const std::vector<Key>& keys,
                      const Callback& cb = nullptr) = 0;
-  virtual int Register(char* buf, size_t size) = 0;
 
- protected:
-  std::unordered_map<Key, IndexEntry> indexs_;
+  virtual int Register(const char* buf, size_t size) = 0;
+
+  virtual void Free(Value* value) = 0;
 };
 
-}  // namespace kvstore
+class KVServer {
+ public:
+  virtual ~KVServer() {}
 
-#endif  // KVSTORE_KVSTORE_H_
+  static KVServer* Create(const char* type = "local");
+
+  virtual int Init() = 0;
+
+  virtual int Run() = 0;
+};
+
+}  // namespace dialga
+
+#endif  // DIALGA_KVSTORE_HPP_

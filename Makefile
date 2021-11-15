@@ -1,24 +1,50 @@
-# make clean; make for non-GDR version
-# make clean; GDR=1 make for GDR version
-all = server client
-target = server.o client.o
-objects = kvstore-rdma.o rdmatools.o
-headers = config.hpp kvstore-rdma.hpp rdmatools.hpp
-CC = g++
+.PHONY: clean compiledb
 
-CFLAGS = -Wall  -O3 
-LDFLAGS = -libverbs -lglog -lpthread -lgflags
-all: $(all)
+CXX ?= g++
+CC ?= gcc
 
-server: server.o $(objects)
-	$(CC) -o server server.cpp $(objects) $(LDFLAGS) $(CFLAGS)
+INCPATH := -Isrc -Iinclude
+CFLAGS := -std=c++17 -msse2 -ggdb -Wall -finline-functions $(INCPATH) $(ADD_CFLAGS)
+LDFLAGS := -libverbs -lglog -lpthread -lgflags $(ADD_LDFLAGS)
 
-client: client.o $(objects)
-	$(CC) -o client client.cpp $(objects) $(LDFLAGS) $(CFLAGS)
+DEBUG := 0
+ifeq ($(DEBUG), 1)
+CFLAGS += -ftrapv -fstack-protector-strong
+else
+CFLAGS += -O3 -DNDEBUG
+endif
 
-$(objects) : %.o : %.cpp $(headers)
-	$(CC) -c $(CFLAGS) $< -o $@
+ifdef ASAN
+CFLAGS += -fsanitize=address -fno-omit-frame-pointer -fno-optimize-sibling-calls
+endif
 
-.PHONY : clean
-clean:
-	rm $(all)  $(objects)
+SRCS := $(shell find src -type f -name "*.cpp")
+OBJS := $(patsubst src/%,build/%,$(SRCS:.cpp=.o))
+
+all: dialga app
+
+# The kvstore static library
+dialga: build/libdialga.a
+
+build/libdialga.a: $(OBJS)
+	$(AR) crv $@ $(filter %.o, $?)
+
+build/%.o: src/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(INCPATH) $(CFLAGS) -MM -MT build/$*.o $< >build/$*.d
+	$(CXX) $(INCPATH) $(CFLAGS) -c $< -o $@
+
+compiledb:
+	@[[ -f compile_commands.json ]] && mv -f compile_commands.json /tmp || true
+	bear -- make
+
+-include build/*.d
+-include build/*/*.d
+
+clean: clean_app
+	$(RM) $(OBJS)
+	$(RM) $(OBJS:.o=.d)
+	$(RM) build/libdialga.a
+
+-include app/Makefile
+app: $(APPS)

@@ -3,13 +3,27 @@
 #include <thread>
 #include <vector>
 
-#include "concurrentqueue.hpp"
-#include "kvstore.hpp"
-#include "rdmatools.hpp"
-namespace kvstore {
+#include "dialga/internal/concurrentqueue.hpp"
+#include "dialga/kvstore.hpp"
+#include "rdma/rdmatools.hpp"
+
+namespace dialga {
 
 enum KVOpType { KV_PUT = 0, KV_GET, KV_DELETE };
 enum AckType { KV_ACK_PUT = 0, KV_ACK_GET };
+
+class IndexEntry {
+ public:
+  IndexEntry(int qp_index, uint64_t addr, size_t size)
+      : qp_index_(qp_index), addr_(addr), size_(size) {}
+  // which host(qp) owns the content
+  int qp_index_;
+  // the virtual addr of the content
+  uint64_t addr_;
+  uint32_t rkey_;
+  // the size of the content
+  size_t size_;
+};
 
 class TxMessage {
  public:
@@ -96,10 +110,13 @@ class RdmaKVStore : public KVStore {
           const Callback& cb = nullptr);
   // TODO: ibv_reg_mr() does not support const char *buf register
   // TODO: When register, allocate size + control message size.
-  int Register(char* buf, size_t size);
+  int Register(const char* buf, size_t size);
   // TODO: int Deregsiter(char* buf, size_t size);
   void Free(Value* value);
   int Delete(const std::vector<Key>& keys, const Callback& cb = nullptr);
+
+ private:
+  std::unordered_map<Key, IndexEntry> indexs_;
 
  private:
   RdmaManager* manager_ = nullptr;
@@ -110,9 +127,11 @@ class RdmaKVStore : public KVStore {
   uint32_t get_id_ = 0;
 };
 
-class RdmaKVServer {
+class RdmaKVServer : public KVServer {
  public:
-  int Init();
+  virtual ~RdmaKVServer() {}
+  int Init() override;
+  int Run() override;
   int TcpListen();
   int PollThread();
   int ProcessThread();
@@ -143,4 +162,5 @@ class RdmaKVServer {
   int PostSend(int conn_id, RdmaBuffer* rdma_buffer, size_t size,
                uint32_t imm_data, enum KVOpType);
 };
-}  // namespace kvstore
+
+}  // namespace dialga

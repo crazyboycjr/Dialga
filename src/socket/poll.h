@@ -3,7 +3,7 @@
 #include <sys/epoll.h>
 #include <optional>
 
-#include "socket/socket.h"
+#include "./socket.h"
 #include <glog/logging.h>
 
 namespace dialag {
