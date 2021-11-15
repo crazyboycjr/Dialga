@@ -1,5 +1,5 @@
-#ifndef KVSTORE_CONFIG_HPP_
-#define KVSTORE_CONFIG_HPP_
+#ifndef DIALGA_CONFIG_HPP_
+#define DIALGA_CONFIG_HPP_
 #include <gflags/gflags.h>
 #include <gflags/gflags_declare.h>
 #include <glog/logging.h>
@@ -9,7 +9,7 @@
 #include <sstream>
 #include <string>
 
-namespace kvstore {
+namespace dialga {
 
 DECLARE_string(dev);
 DECLARE_int32(gid);
@@ -48,6 +48,6 @@ constexpr int kCqPollDepth = 128;
 constexpr int kMaxConnection = 3;   // At most 3 QPs per client 
 constexpr int kCtrlMsgSize = 128; 
 
-}  // namespace kvstore
+}  // namespace dialga
 
-#endif  // KVSTORE_CONFIG_H_
+#endif  // DIALGA_CONFIG_HPP_

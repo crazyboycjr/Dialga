@@ -1,7 +1,7 @@
 /*
  * RDMA KVStore Implementation
  */
-#include "kvstore-rdma.hpp"
+#include "./kvstore-rdma.hpp"
 
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
@@ -14,11 +14,11 @@
 #include <thread>
 #include <unordered_map>
 
-#include "config.hpp"
-#include "kvstore.hpp"
-#include "rdmatools.hpp"
+#include "dialga/config.hpp"
+#include "dialga/kvstore.hpp"
+#include "rdma/rdmatools.hpp"
 
-namespace kvstore {
+namespace dialga {
 DEFINE_string(connect, "",
               "The connection info (ip:port,ip:port, ...). E.g., "
               "\"192.168.0.1:12000,192.168.0.2:12001\"");
@@ -464,7 +464,7 @@ void RdmaKVStore::Free(Value* value) {
   return;
 }
 
-int RdmaKVStore::Register(char* buf, size_t size) {
+int RdmaKVStore::Register(const char* buf, size_t size) {
   size += kCtrlMsgSize;
   if (!buf) {
     LOG(ERROR) << "Register nullptr. Failed.";
@@ -475,7 +475,7 @@ int RdmaKVStore::Register(char* buf, size_t size) {
     // This memory has been registered before.
     return 0;
   }
-  auto mr = manager_->RegisterMemory(buf, size);
+  auto mr = manager_->RegisterMemory(const_cast<char*>(buf), size);
   if (!mr) return -1;
   memory_regions_.insert({(uint64_t)buf, mr});
   return 0;
@@ -498,6 +498,10 @@ int RdmaKVServer::Init() {
   process_thread_ = std::thread(&RdmaKVServer::ProcessThread, this);
   process_thread_.detach();
   return 0;
+}
+
+int RdmaKVServer::Run() {
+  return TcpListen();
 }
 
 int RdmaKVServer::TcpListen() {
@@ -833,5 +837,4 @@ int RdmaKVServer::PostRecvBatch(int conn_id, int n) {
   }
   return 0;
 }
-
-}  // namespace kvstore
+}  // namespace dialga

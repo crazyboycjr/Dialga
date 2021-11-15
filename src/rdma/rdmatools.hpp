@@ -1,5 +1,5 @@
-#ifndef KVSTORE_RDMATOOLS_HPP
-#define KVSTORE_RDMATOOLS_HPP
+#ifndef DIALGA_RDMATOOLS_HPP
+#define DIALGA_RDMATOOLS_HPP
 #include <infiniband/verbs.h>
 
 #include <map>
@@ -10,9 +10,9 @@
 #include <mutex>
 #include <atomic>
 
-#include "config.hpp"
+#include "dialga/config.hpp"
 
-namespace kvstore {
+namespace dialga {
 
 class RdmaBuffer {
  public:
@@ -112,7 +112,12 @@ struct ibv_qp_attr MakeQpAttr(enum ibv_qp_state state, enum ibv_qp_type qp_type,
                               int remote_qpn, const union ibv_gid& remote_gid,
                               int* attr_mask);
 
-uint64_t Now64();
-}  // namespace kvstore
+inline uint64_t Now64() {
+  struct timespec tv;
+  clock_gettime(CLOCK_REALTIME, &tv);
+  return (uint64_t)tv.tv_sec * 1000000llu + (uint64_t)tv.tv_nsec / 1000;
+}
 
-#endif  // KVSTORE_KVSTORE_H_
+}  // namespace dialga
+
+#endif  // DIALGA_RDMATOOLS_HPP
