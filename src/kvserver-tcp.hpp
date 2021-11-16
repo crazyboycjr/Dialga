@@ -1,5 +1,5 @@
-#ifndef DIALGA_KVSTORE_TCP_HPP_
-#define DIALGA_KVSTORE_TCP_HPP_
+#ifndef DIALGA_KVSERVER_TCP_HPP_
+#define DIALGA_KVSERVER_TCP_HPP_
 #include "dialga/kvstore.hpp"
 #include "prism/thread_proto.h"
 #include "socket/socket.h"
@@ -12,7 +12,7 @@
 
 namespace dialga {
 
-namespace client {
+namespace server {
 using namespace socket;
 class Endpoint {
  public:
@@ -40,33 +40,23 @@ class Endpoint {
   TxQueue tx_queue_;
   Interest interest_;
 };
-}  // namespace client
+}  // namespace server
 
-class KVStoreTcp final : public KVStore {
+class KVServerTcp final : public KVServer {
  public:
-  virtual ~KVStoreTcp() {}
+  virtual ~KVServerTcp() {}
 
   int Init() override;
 
-  int Put(const std::vector<Key>& keys,
-          const std::vector<Value>& values) override;
+  int Run() override;
 
-  int Get(const std::vector<Key>& keys,
-          const std::vector<Value*>& values,
-          const Callback& cb = nullptr) override;
-
-  int Delete(const std::vector<Key>& keys,
-             const Callback& cb = nullptr) override;
-
-  int Register(const char* buf, size_t size) override;
-
-  void Free(Value* value) override;
+  static int ExitHandler(int sig, void* app_ctx);
 
  private:
-  std::vector<std::unique_ptr<ioworker::IoWorker<client::Endpoint>>>
+  std::vector<std::unique_ptr<ioworker::IoWorker<server::Endpoint>>>
       io_workers_;
 };
 
 }  // namespace dialga
 
-#endif  // DIALGA_KVSTORE_TCP_HPP_
+#endif  // DIALGA_KVSERVER_TCP_HPP_

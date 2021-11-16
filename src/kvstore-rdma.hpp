@@ -92,8 +92,6 @@ class RdmaKVStore : public KVStore {
  public:
   int Init();  // return 0 on success. If success, then can Put and Get.
   void Poll();
-  std::vector<std::string> GetHostList(const std::string&);
-  void ParseHostPort(const std::string&, std::string&, int&);
   int PostRecvBatch(int conn_id, int n);
   int PrepostProcess(
       const std::vector<Key>& keys, const std::vector<Value>& values,
