@@ -6,6 +6,7 @@
 #include "dialga/internal/concurrentqueue.hpp"
 #include "dialga/kvstore.hpp"
 #include "rdma/rdmatools.hpp"
+#include "prism/spsc_queue.h"
 
 namespace dialga {
 
@@ -147,7 +148,8 @@ class RdmaKVServer : public KVServer {
   RdmaManager* manager_ = nullptr;
   std::vector<RdmaConnection*> connections_;
   std::unordered_map<uint64_t, StorageEntry*> storage_;  // Key to Value storage
-  moodycamel::ConcurrentQueue<struct ibv_wc> wc_queues_;
+  // moodycamel::ConcurrentQueue<struct ibv_wc> wc_queues_;
+  prism::SpscQueue<struct ibv_wc> wc_queues_;
   std::thread polling_thread_;
   std::thread process_thread_;
 
