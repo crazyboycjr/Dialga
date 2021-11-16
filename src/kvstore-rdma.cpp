@@ -230,7 +230,8 @@ int RdmaKVStore::PrepostProcess(const std::vector<Key>& keys,
         LOG(ERROR) << "GET should only access existing keys";
         return -1;
       }
-      conn_idx = i % connections_.size();
+      if (index_id_ == connections_.size()) index_id_ = 0;
+      conn_idx = index_id_++;
       IndexEntry newentry(conn_idx, 0, values[i].size_);
       indexs_.insert({keys[i], newentry});
     } else {
@@ -438,10 +439,10 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
       wr_list[j][wr_index[j] - 1].send_flags = IBV_SEND_SIGNALED;
       ClientWrContext* wr_ctx = new ClientWrContext(j, wr_index[j], KV_PUT);
       wr_list[j][wr_index[j] - 1].wr_id = (uint64_t)wr_ctx;
-    }
-    if (ibv_post_send(connections_[j]->GetQp(), wr_list[j], &bad_wr)) {
-      PLOG(ERROR) << "ibv_post_send() failed for last batch";
-      return -1;
+      if (ibv_post_send(connections_[j]->GetQp(), wr_list[j], &bad_wr)) {
+        PLOG(ERROR) << "ibv_post_send() failed for last batch";
+        return -1;
+      }
     }
   }
   // LOG(INFO) << "PUT finished " << Now64();

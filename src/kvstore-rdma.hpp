@@ -118,14 +118,13 @@ class RdmaKVStore : public KVStore {
 
  private:
   std::unordered_map<Key, IndexEntry> indexs_;
-
- private:
   RdmaManager* manager_ = nullptr;
   std::thread polling_thread_;
   std::vector<RdmaConnection*> connections_;
   std::unordered_map<uint64_t, struct ibv_mr*> memory_regions_;
   std::unordered_map<Value*, RdmaBuffer*> user_hold_buffers_;
   uint32_t get_id_ = 0;
+  uint32_t index_id_ = 0;
 };
 
 class RdmaKVServer : public KVServer {
