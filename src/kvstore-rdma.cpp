@@ -586,17 +586,11 @@ int RdmaKVServer::ProcessThread() {
   LOG(INFO) << "RdmaKVServer Process thread starts";
   while (true) {
     struct ibv_wc wc;
-    bool success = wc_queues_.try_dequeue(wc);
-    if (success) {
-      // Dequeue success
-      // LOG(INFO) << "Start process Recv " << Now64();
-      if (ProcessRecvCqe(&wc)) {
-        LOG(ERROR) << "ProcessRecvCqe() failed in processing thread";
-      }
-      delete (ServerWrContext*)wc.wr_id;
-    } else {
-      usleep(2);  // If the wc queue is empty. Process Thread should yield.
+    wc_queues_.WaitAndPop(&wc);
+    if (ProcessRecvCqe(&wc)) {
+      LOG(ERROR) << "ProcessRecvCqe() failed in processing thread";
     }
+    delete (ServerWrContext*)wc.wr_id;
   }
 }
 
@@ -645,7 +639,8 @@ int RdmaKVServer::PollThread() {
               // put the ibv_wc to the concurrent queue. The process thread will
               // process it.
               // LOG(INFO) << "Poll Recv " << Now64();
-              wc_queues_.enqueue(wc[i]);
+              // wc_queues_.enqueue(wc[i]);
+              wc_queues_.Push(wc[i]);
               connections_[wr_context->conn_id_]->UpdateRecvCredits(1);
               break;
             default:
