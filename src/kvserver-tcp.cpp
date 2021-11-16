@@ -54,19 +54,20 @@ void Endpoint::OnRecvReady() {}
 int KVServerTcp::Init() {
   // Create a socket that bind and listen on the port.
   AddrInfo ai(FLAGS_port, SOCK_STREAM);
-  TcpSocket listener;
-  listener.Create(ai);
-  listener.SetReuseAddr(true);
-  // Use SO_REUSEPORT to allow multiple epoll instance sharing one port
-  listener.SetReusePort(true);
-  listener.SetNonBlock(true);
-  listener.Bind(ai);
-  listener.Listen();
-
-  LOG(INFO) << "Socket server is listening on uri: " << ai.AddrStr();
 
   // Pass the listener to a bunch of IoWorkers.
   for (uint32_t i = 0; i < FLAGS_num_io_workers; i++) {
+    TcpSocket listener;
+    listener.Create(ai);
+    listener.SetReuseAddr(true);
+    // Use SO_REUSEPORT to allow multiple epoll instance sharing one port
+    listener.SetReusePort(true);
+    listener.SetNonBlock(true);
+    listener.Bind(ai);
+    listener.Listen();
+
+    LOG(INFO) << "Socket server is listening on uri: " << ai.AddrStr();
+
     auto io_worker = std::make_unique<IoWorker<server::Endpoint>>(listener);
     io_workers_.push_back(std::move(io_worker));
   }

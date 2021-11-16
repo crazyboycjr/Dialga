@@ -17,7 +17,6 @@ DECLARE_int32(gid);
 DECLARE_int32(mr_num);     // initial number of mr.
 DECLARE_int32(buf_num);    // initial number of buffer per mr.
 DECLARE_uint32(buf_size);  // initial buffer size.
-DECLARE_int32(port);
 
 DECLARE_bool(share_cq);
 DECLARE_bool(event);
@@ -36,8 +35,11 @@ DECLARE_int32(max_qp_rd_atom);
 DECLARE_int32(mtu);
 
 DECLARE_string(connect);
+DECLARE_int32(port);
 
 DECLARE_uint32(num_io_workers);
+
+DECLARE_string(comm);
 
 /// Client side configuration.
 constexpr uint16_t kDefaultPort = 6000;

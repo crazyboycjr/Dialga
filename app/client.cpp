@@ -11,6 +11,7 @@
 
 #include "prism/utils.h"
 #include "dialga/kvstore.hpp"
+#include "dialga/config.hpp"
 
 using prism::Now64;
 
@@ -180,7 +181,7 @@ int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
   FLAGS_logtostderr = 1;
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  auto client = dialga::KVStore::Create("rdma");
+  auto client = dialga::KVStore::Create(dialga::FLAGS_comm.c_str());
   client->Init();
   if (FLAGS_validation) {
     int batch = 1, iters = 1;

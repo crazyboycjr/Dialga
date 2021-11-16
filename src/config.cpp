@@ -17,6 +17,9 @@ DEFINE_int32(port, 12000, "The server listen port (TCP).");
 DEFINE_uint32(num_io_workers, kDefaultNumIoWorkers,
               "The number of I/O workers (number of CPUs dedicated to I/O).");
 
+DEFINE_string(comm, "rdma",
+              "The communication method to use (current support: [RDMA, TCP])");
+
 std::vector<std::string> GetHostList(const std::string& str) {
   std::vector<std::string> result;
   std::stringstream s_stream(str);
