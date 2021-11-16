@@ -57,6 +57,8 @@ int KVServerTcp::Init() {
   TcpSocket listener;
   listener.Create(ai);
   listener.SetReuseAddr(true);
+  // Use SO_REUSEPORT to allow multiple epoll instance sharing one port
+  listener.SetReusePort(true);
   listener.SetNonBlock(true);
   listener.Bind(ai);
   listener.Listen();
@@ -90,6 +92,12 @@ int KVServerTcp::Run() {
   // Register a Ctrl-C signal handler.
   ExitHandler(0, this);
   signal(SIGINT, (void (*)(int))KVServerTcp::ExitHandler);
+
+  // Start all the threads. I really don't know now why this have to be a
+  // seperate operation in C++.
+  for (auto& io_worker : io_workers_) {
+    io_worker->Start();
+  }
 
   // Wait for all the IoWorkers to finish.
   for (auto& io_worker : io_workers_) {

@@ -133,6 +133,11 @@ class Socket {
     PCHECK(!setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)));
   }
 
+  inline void SetReusePort(bool reuse) {
+    int val = reuse ? 1 : 0;
+    PCHECK(!setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &val, sizeof(val)));
+  }
+
   inline void SetRecvBuffer(int bufsize) {
     int val = bufsize;
     PCHECK(!setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &val, sizeof(val)));
