@@ -8,18 +8,19 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace dialga {
 
 DECLARE_string(dev);
 DECLARE_int32(gid);
-DECLARE_int32(mr_num);    // initial number of mr. 
-DECLARE_int32(buf_num);   // initial number of buffer per mr.
-DECLARE_uint32(buf_size); // initial buffer size.
+DECLARE_int32(mr_num);     // initial number of mr.
+DECLARE_int32(buf_num);    // initial number of buffer per mr.
+DECLARE_uint32(buf_size);  // initial buffer size.
 DECLARE_int32(port);
 
 DECLARE_bool(share_cq);
-DECLARE_bool(event); 
+DECLARE_bool(event);
 DECLARE_int32(cq_depth);
 DECLARE_int32(send_wq_depth);
 DECLARE_int32(recv_wq_depth);
@@ -36,6 +37,8 @@ DECLARE_int32(mtu);
 
 DECLARE_string(connect);
 
+DECLARE_uint32(num_io_workers);
+
 /// Client side configuration.
 constexpr uint16_t kDefaultPort = 6000;
 constexpr uint16_t kDefaultNumCPUs = 1;
@@ -43,10 +46,16 @@ constexpr uint16_t kDefaultNumCPUs = 1;
 constexpr int kMaxBatch = 128;
 constexpr int kMaxSge = 16;
 constexpr int kMaxInline = 512;
-constexpr int kMaxConcur = 48;      // At most 48 QPs per server
+constexpr int kMaxConcur = 48;  // At most 48 QPs per server
 constexpr int kCqPollDepth = 128;
-constexpr int kMaxConnection = 3;   // At most 3 QPs per client 
-constexpr int kCtrlMsgSize = 128; 
+constexpr int kMaxConnection = 3;  // At most 3 QPs per client
+constexpr int kCtrlMsgSize = 128;
+
+constexpr uint32_t kDefaultNumIoWorkers = 4;
+
+std::vector<std::string> GetHostList(const std::string& str);
+
+void ParseHostPort(const std::string& str, std::string& host, int& port);
 
 }  // namespace dialga
 

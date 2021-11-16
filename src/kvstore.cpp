@@ -4,6 +4,7 @@
 #include "dialga/kvstore.hpp"
 #include "./kvstore-rdma.hpp"
 #include "./kvstore-tcp.hpp"
+#include "./kvserver-tcp.hpp"
 
 namespace dialga {
 

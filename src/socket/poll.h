@@ -1,12 +1,14 @@
 #ifndef DIALGA_SOCKET_POLL_H_
 #define DIALGA_SOCKET_POLL_H_
 #include <sys/epoll.h>
+#include <chrono>
 #include <optional>
 
-#include "./socket.h"
 #include <glog/logging.h>
 
-namespace dialag {
+#include "./socket.h"
+
+namespace dialga {
 namespace socket {
 
 class Interest {
@@ -340,7 +342,7 @@ class Poll {
     return registry_;
   }
   inline int PollUntil(Event* events, int maxevents,
-                       std::optional<std::chrono::microseconds> timeout_ms) {
+                       std::optional<std::chrono::milliseconds> timeout_ms) {
     return registry_.selector_.Select(events, maxevents, timeout_ms);
   }
 
