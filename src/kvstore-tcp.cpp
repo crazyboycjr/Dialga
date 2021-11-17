@@ -65,7 +65,7 @@ int KVStoreTcp::Init() {
     }
 
     // for each active connection, set a dedicate IoWorker for it
-    auto io_worker = std::make_unique<IoWorker<client::Endpoint>>();
+    auto io_worker = std::make_unique<IoWorker<client::Endpoint>>(this);
     io_worker->AddNewConnection(sock);
     io_workers_.push_back(std::move(io_worker));
   }

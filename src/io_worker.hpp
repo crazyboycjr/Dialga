@@ -17,16 +17,28 @@ using namespace socket;
 template <typename Endpoint>
 class IoWorker : public TerminableThread {
  public:
-  explicit IoWorker()
-      : listener_{INVALID_SOCKET}, poll_{socket::Poll::Create()} {}
+  explicit IoWorker(void* context)
+      : context_{context},
+        listener_{INVALID_SOCKET},
+        poll_{socket::Poll::Create()} {}
 
-  explicit IoWorker(socket::TcpSocket listener)
-      : listener_{listener}, poll_{socket::Poll::Create()} {
+  explicit IoWorker(void* context, socket::TcpSocket listener)
+      : context_{context}, listener_{listener}, poll_{socket::Poll::Create()} {
     poll_.registry().Register(listener_, Token(listener_.sockfd),
                               Interest::READABLE);
   }
 
   inline socket::Poll& poll() { return poll_; }
+
+  template <typename Context>
+  inline Context& context() {
+    return *static_cast<Context*>(context_);
+  }
+
+  template <typename Context>
+  inline const Context& context() const {
+    return *static_cast<const Context*>(context_);
+  }
 
   void Run() override {
     int timeout_ms =
@@ -86,6 +98,8 @@ class IoWorker : public TerminableThread {
     AddNewConnection(new_sock);
   }
 
+  // type earsed context.
+  void* context_;
   socket::TcpSocket listener_;
   socket::Poll poll_;
   std::map<socket::RawFd, std::shared_ptr<Endpoint>> endpoints_;

@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <malloc.h>
-#include <cstdlib>
+#include <unistd.h>
 
 /// for small buffers, typically smaller than megabytes, malloc and free is as
 /// fast as several nanoseconds, so to avoid the mutex and thread
@@ -29,12 +29,13 @@ class Buffer {
         cap_{0},
         msg_length_{0},
         bytes_handled_{0},
-        is_owner_{false} {}
+        owned_{false} {}
 
   explicit Buffer(size_t cap)
-      : cap_{cap}, msg_length_{0}, bytes_handled_{0}, is_owner_{true} {
+      : cap_{cap}, msg_length_{0}, bytes_handled_{0}, owned_{true} {
     // ptr_ = static_cast<char*>(malloc(size_));
-    int rc = posix_memalign(reinterpret_cast<void**>(&ptr_), 4096, cap);
+    int rc = posix_memalign(reinterpret_cast<void**>(&ptr_),
+                            sysconf(_SC_PAGESIZE), cap);
     CHECK_EQ(rc, 0) << "posix_memalign failed";
   }
 
@@ -46,13 +47,13 @@ class Buffer {
         cap_{cap},
         msg_length_{msg_length},
         bytes_handled_{0},
-        is_owner_{false} {}
+        owned_{false} {}
 
   explicit Buffer(Buffer* buffer)
       : Buffer(buffer->ptr_, buffer->cap_, buffer->msg_length_) {}
 
   ~Buffer() {
-    if (is_owner_ && ptr_) {
+    if (owned_ && ptr_) {
       free(ptr_);
       ptr_ = nullptr;
     }
@@ -76,6 +77,8 @@ class Buffer {
 
   inline size_t capacity() { return cap_; }
 
+  inline bool owned() const { return owned_; }
+
   void CopyFrom(Buffer* other) {
     CHECK_GE(cap_, other->msg_length_);
     memcpy(ptr_, other->ptr_, other->msg_length_);
@@ -91,7 +94,7 @@ class Buffer {
   // bytes already handled
   uint32_t bytes_handled_;
   // whether this memory is owned
-  bool is_owner_;
+  bool owned_;
 };
 
 }  // namespace socket

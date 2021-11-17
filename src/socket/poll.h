@@ -37,6 +37,9 @@ class Interest {
   inline Interest Add(const Interest other) const {
     return Interest(inner_ | other.inner_);
   }
+  inline Interest Remove(const Interest other) const {
+    return Interest(inner_ & ~other.inner_);
+  }
   inline Interest operator|(const Interest other) const {
     return this->Add(other);
   }
