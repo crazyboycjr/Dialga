@@ -35,6 +35,7 @@ void Endpoint::OnEstablished() {
   io_worker_.poll().registry().Register(
       sock_, Token(reinterpret_cast<uintptr_t>(this)), interest_);
   PrepareNewReceive();
+  tx_stage_ = TxStage::NothingToSend;
   LOG(INFO) << "Accept connection from: " << GetPeerAddr().AddrStr();
 }
 
@@ -53,7 +54,7 @@ WorkQueue& Endpoint::GetWorkQueue() {
 void Endpoint::NotifyWork() {
   if (!interest_.IsWritable()) {
     // add this endpoint back to epoll set
-    interest_.Add(Interest::WRITABLE);
+    interest_ = interest_.Add(Interest::WRITABLE);
     io_worker_.poll().registry().Reregister(
         sock_, Token(reinterpret_cast<uintptr_t>(this)), interest_);
   }
@@ -68,7 +69,7 @@ void Endpoint::OnSendReady() {
         if (interest_.IsWritable()) {
           // remove this endpoint from the writable interested set, saving CPU,
           // but will increase latency.
-          interest_.Remove(Interest::WRITABLE);
+          interest_ = interest_.Remove(Interest::WRITABLE);
           io_worker_.poll().registry().Reregister(
               sock_, Token(reinterpret_cast<uintptr_t>(this)), interest_);
         }
@@ -142,7 +143,7 @@ void Endpoint::OnRecvReady() {
     if (!rx_buffer_.HasRemaining()) {
       switch (rx_stage_) {
         case RxStage::Meta: {
-          // allocate KVPairs
+          // allocate KVPairs, values are not allocated until lens are received
           kvs_ = KVPairs(meta_);
           // update the buffer to points to the keys, then lens, then values
           // accordingly
@@ -168,6 +169,11 @@ void Endpoint::OnRecvReady() {
           break;
         }
         case RxStage::Lens: {
+          // allocate space for values
+          kvs_.values.resize(meta_.num_keys);
+          for (uint32_t i = 0; i < meta_.num_keys; i++) {
+            kvs_.values[i] = SArray<char>(kvs_.lens[i] / sizeof(char));
+          }
           rx_value_index_ = 0;
           // update the buffer to the first value
           rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
@@ -179,7 +185,7 @@ void Endpoint::OnRecvReady() {
         }
         case RxStage::Values: {
           rx_value_index_++;
-          CHECK(tx_meta_.op == Operation::GET);
+          CHECK_EQ(meta_.op, Operation::PUT);
           if (rx_value_index_ < meta_.num_keys) {
             // move the buffer to the next value
             rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
@@ -213,6 +219,7 @@ void Endpoint::PrepareNewReceive() {
 void Endpoint::PrepareNewSend(const Message& msg) {
   tx_stage_ = TxStage::Meta;
   tx_meta_.op = msg.op;
+  tx_meta_.num_keys = msg.kvs.keys.size();
   tx_meta_.timestamp = msg.timestamp;
   tx_kvs_ = msg.kvs;
   tx_buffer_ = Buffer(&tx_meta_, sizeof(tx_meta_), sizeof(tx_meta_));
@@ -290,7 +297,7 @@ void KVServerTcp::MainLoop() {
         case Operation::PUT: {
           auto& kvs = msg.kvs;
           CHECK(!kvs.keys.empty());
-          CHECK(kvs.keys.size() == kvs.values.size());
+          CHECK_EQ(kvs.keys.size(), kvs.values.size());
           for (size_t i = 0; i < kvs.keys.size(); i++) {
             auto key = kvs.keys[i];
             storage_[key] = SArray(kvs.values[i]);

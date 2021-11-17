@@ -3,6 +3,7 @@
 #include <map>
 #include <memory>
 #include <queue>
+#include <mutex>
 
 #include "dialga/kvstore.hpp"
 #include "prism/thread_proto.h"
@@ -40,7 +41,10 @@ class IoWorker : public TerminableThread {
     return *static_cast<const Context*>(context_);
   }
 
-  inline const size_t GetNumEndpoints() const { return endpoints_.size(); }
+  inline const size_t GetNumEndpoints() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return endpoints_.size();
+  }
 
   void Run() override {
     int timeout_ms =
@@ -82,6 +86,7 @@ class IoWorker : public TerminableThread {
 
         if (ev.IsError() || ev.IsReadClosed() || ev.IsWriteClosed()) {
           endpoint->OnError();
+          std::lock_guard<std::mutex> lk(mu_);
           endpoints_.erase(endpoint->fd());
         }
       }
@@ -89,9 +94,10 @@ class IoWorker : public TerminableThread {
   }
 
   std::shared_ptr<Endpoint> AddNewConnection(TcpSocket new_sock) {
+    std::lock_guard<std::mutex> lk(mu_);
     auto endpoint = std::make_shared<Endpoint>(new_sock, *this);
-    endpoint->OnEstablished();
     endpoints_[endpoint->fd()] = endpoint;
+    endpoint->OnEstablished();
     return endpoint;
   }
 
@@ -106,6 +112,7 @@ class IoWorker : public TerminableThread {
   socket::TcpSocket listener_;
   socket::Poll poll_;
   std::map<socket::RawFd, std::shared_ptr<Endpoint>> endpoints_;
+  mutable std::mutex mu_;
 };
 
 }  // namespace ioworker

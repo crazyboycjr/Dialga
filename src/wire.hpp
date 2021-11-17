@@ -41,10 +41,6 @@ struct KVPairs {
       keys = SArray<Key>(meta.num_keys);
       lens = SArray<uint32_t>(meta.num_keys);
       values.clear();
-      values.reserve(meta.num_keys);
-      for (uint32_t i = 0; i < meta.num_keys; i++) {
-        values[i] = SArray<char>(lens[i] / sizeof(char));
-      }
     } else if (meta.op == Operation::GET || meta.op == Operation::DELETE) {
       // for GET and DELETE, only `keys` is non-empty.
       keys = SArray<Key>(meta.num_keys);

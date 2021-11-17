@@ -30,6 +30,8 @@ struct OpContext {
   std::atomic<uint32_t> received;
   /*! \brief the callback to run, (Send + Static) */
   Callback cb;
+  /*! \brief lock */
+  std::mutex mu_;
 
   explicit OpContext(uint32_t target, Callback callback) {
     expected = target;
@@ -39,10 +41,14 @@ struct OpContext {
 
   // TODO(cjr): double-check this function.
   inline bool UpdateReceived() {
+    std::lock_guard<std::mutex> lk(mu_);
     this->received.fetch_add(1);
-    auto expected = this->expected - 1;
-    auto desired = this->expected;
-    return this->received.compare_exchange_strong(expected, desired);
+    return this->received.load() == this->expected;
+
+    // this->received.fetch_add(1);
+    // auto expected = this->expected - 1;
+    // auto desired = this->expected;
+    // return this->received.compare_exchange_strong(expected, desired);
   }
 };
 
@@ -82,6 +88,8 @@ class Endpoint {
   using TxQueue = prism::SpscQueue<Message>;
 
   Endpoint(TcpSocket sock, ioworker::IoWorker<Endpoint>& io_worker);
+
+  ~Endpoint();
 
   void OnError();
   void OnEstablished();
@@ -154,6 +162,15 @@ class IoManager {
     return &inst;
   }
 
+  ~IoManager() {
+    for (auto& io_worker : io_workers_) {
+      io_worker->Terminate();
+    }
+    for (auto& io_worker : io_workers_) {
+      io_worker->Join();
+    }
+  }
+
   ioworker::IoWorker<client::Endpoint>* ScheduleIoWorker(ScheduleMode mode) {
     std::lock_guard<std::mutex> lk(mu_);
     // schedule a IoWorker for this connection
@@ -183,6 +200,7 @@ class IoManager {
   void SpawnOne() {
     auto io_worker =
         std::make_unique<ioworker::IoWorker<client::Endpoint>>(nullptr);
+    io_worker->Start();
     io_workers_.push_back(std::move(io_worker));
   }
   IoManager() {

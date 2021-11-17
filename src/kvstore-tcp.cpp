@@ -22,6 +22,11 @@ Endpoint::Endpoint(TcpSocket sock, IoWorker<Endpoint>& io_worker)
       io_worker_{io_worker},
       interest_{Interest::READABLE | Interest::WRITABLE} {}
 
+Endpoint::~Endpoint() {
+  io_worker_.poll().registry().Deregister(sock_);
+  sock_.Close();
+}
+
 void Endpoint::OnError() {
   LOG(ERROR) << "Socket error: " << sock_.GetSockError()
              << ", remote uri: " << GetPeerAddr().AddrStr();
@@ -34,6 +39,8 @@ void Endpoint::OnEstablished() {
   sock_.SetNodelay(true);
   io_worker_.poll().registry().Register(
       sock_, Token(reinterpret_cast<uintptr_t>(this)), interest_);
+  PrepareNewReceive();
+  tx_stage_ = TxStage::NothingToSend;
   LOG(INFO) << "Connected to: " << GetPeerAddr().AddrStr();
 }
 
@@ -95,7 +102,7 @@ void Endpoint::OnSendReady() {
         }
         case TxStage::Values: {
           tx_value_index_++;
-          CHECK(tx_meta_.op == Operation::PUT);
+          CHECK_EQ(tx_meta_.op, Operation::PUT);
           if (tx_value_index_ < tx_meta_.num_keys) {
             // move the buffer to the next value
             tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_].data(),
@@ -178,7 +185,7 @@ void Endpoint::OnRecvReady() {
         }
         case RxStage::Values: {
           rx_value_index_++;
-          CHECK_EQ(tx_meta_.op, Operation::GET);
+          CHECK_EQ(meta_.op, Operation::GET);
           if (rx_value_index_ < meta_.num_keys) {
             // move the buffer to the next value
             rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
@@ -209,6 +216,7 @@ void Endpoint::PrepareNewReceive() {
 void Endpoint::PrepareNewSend(const Message& msg) {
   tx_stage_ = TxStage::Meta;
   tx_meta_.op = msg.op;
+  tx_meta_.num_keys = msg.kvs.keys.size();
   tx_meta_.timestamp = msg.timestamp;
   tx_kvs_ = msg.kvs;
   tx_buffer_ = Buffer(&tx_meta_, sizeof(tx_meta_), sizeof(tx_meta_));

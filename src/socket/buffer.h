@@ -65,7 +65,7 @@ class Buffer {
 
   inline void Advance(size_t nbytes) { bytes_handled_ += nbytes; }
 
-  inline bool HasRemaining() { return msg_length_ == bytes_handled_; }
+  inline bool HasRemaining() { return msg_length_ > bytes_handled_; }
 
   inline void set_msg_length(uint32_t msg_length) { msg_length_ = msg_length; }
 

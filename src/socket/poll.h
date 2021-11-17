@@ -88,7 +88,7 @@ inline uint32_t InterestToEpoll(Interest interest) {
   /// always report for this event; it is not necessary to set it in events when calling
   /// epoll_ctl().
   // let's just use level-trigger because it's less error prone and still efficient
-  uint32_t kind = EPOLLET;
+  uint32_t kind = 0;
   // uint32_t kind = 0;
   if (interest.IsReadable()) {
     kind |= EPOLLIN | EPOLLRDHUP;
