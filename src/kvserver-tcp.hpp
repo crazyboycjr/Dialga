@@ -9,6 +9,7 @@
 #include "socket/buffer.h"
 #include "socket/poll.h"
 #include "./io_worker.hpp"
+#include "./wire.hpp"
 
 #include <map>
 #include <queue>
@@ -17,49 +18,6 @@
 
 namespace dialga {
 
-enum Operation : uint32_t {
-  PUT = 1,
-  GET = 2,
-  DELETE = 3,
-};
-
-// On wire data.
-// meta | key 0 | key 1 | ... | len 0 | len 1 | ... | value 0 | value 1 | ...
-struct KVMeta {
-  Operation op;
-  uint32_t num_keys;
-};
-
-static_assert(sizeof(KVMeta) == 8, "sizeof(KVMeta) != 8");
-
-struct KVPairs {
-  SArray<Key> keys;
-  SArray<uint32_t> lens;
-  std::vector<SArray<char>> values;
-
-  explicit KVPairs() {}
-
-  explicit KVPairs(const KVMeta& meta) {
-    if (meta.op == Operation::PUT) {
-      // allocate the space for PUT operation
-      keys = SArray<Key>(meta.num_keys);
-      lens = SArray<uint32_t>(meta.num_keys);
-      values.clear();
-      values.reserve(meta.num_keys);
-      for (uint32_t i = 0; i < meta.num_keys; i++) {
-        values[i] = SArray<char>(lens[i] / sizeof(char));
-      }
-    } else if (meta.op == Operation::GET || meta.op == Operation::DELETE) {
-      // for GET and DELETE, only `keys` is non-empty.
-      keys = SArray<Key>(meta.num_keys);
-      lens.clear();
-      values.clear();
-    } else {
-      CHECK(0) << "unexpected op: " << static_cast<uint32_t>(meta.op);
-    }
-  }
-};
-
 namespace server {
 using namespace socket;
 
@@ -67,6 +25,7 @@ class Endpoint;
 
 struct Message {
   Operation op;
+  uint64_t timestamp;
   Endpoint* endpoint;
   KVPairs kvs;
 };
@@ -74,7 +33,7 @@ struct Message {
 using WorkQueue = moodycamel::ConcurrentQueue<Message>;
 
 enum class TxStage {
-  // NothingToSend doesn't the TxQueue is empty. It just means the current
+  // NothingToSend doesn't mean the TxQueue is empty. It just means the current
   // tx_buffer_ is pointing to nothing.
   NothingToSend = 0,
   Meta = 1,

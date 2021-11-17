@@ -8,6 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 
 namespace dialga {
 namespace socket {
@@ -211,6 +212,11 @@ class TcpSocket : public Socket {
   inline void Create(int domain = AF_INET) {
     sockfd = ::socket(domain, SOCK_STREAM, IPPROTO_TCP);
     PCHECK(sockfd != INVALID_SOCKET) << "create socket failed";
+  }
+
+  inline void SetNodelay(bool nodelay) {
+    int val = nodelay ? 1 : 0;
+    PCHECK(!setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val)));
   }
 
   inline void Listen(int backlog = 128) {

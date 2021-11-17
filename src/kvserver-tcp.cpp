@@ -30,8 +30,8 @@ void Endpoint::OnError() {
 }
 
 void Endpoint::OnEstablished() {
-  GetPeerAddr();
   sock_.SetNonBlock(true);
+  sock_.SetNodelay(true);
   io_worker_.poll().registry().Register(
       sock_, Token(reinterpret_cast<uintptr_t>(this)), interest_);
   PrepareNewReceive();
@@ -96,7 +96,7 @@ void Endpoint::OnSendReady() {
         }
         case TxStage::Keys: {
           tx_buffer_ = Buffer(tx_kvs_.lens.data(), tx_kvs_.lens.bytes(), tx_kvs_.lens.bytes());
-          tx_stage_ = TxStage::Keys;
+          tx_stage_ = TxStage::Lens;
           break;
         }
         case TxStage::Lens: {
@@ -111,9 +111,9 @@ void Endpoint::OnSendReady() {
           tx_value_index_++;
           if (tx_value_index_ < tx_meta_.num_keys) {
             // move the buffer to the next value
-            tx_buffer_ = Buffer(kvs_.values[tx_value_index_].data(),
-                                kvs_.values[tx_value_index_].bytes(),
-                                kvs_.values[tx_value_index_].bytes());
+            tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_].data(),
+                                tx_kvs_.values[tx_value_index_].bytes(),
+                                tx_kvs_.values[tx_value_index_].bytes());
           } else {
             // change tx_stage to NothingToSend
             tx_stage_ = TxStage::NothingToSend;
@@ -154,13 +154,13 @@ void Endpoint::OnRecvReady() {
         }
         case RxStage::Keys: {
           // update the buffer to lens
-          rx_buffer_ = Buffer(kvs_.lens.data(), kvs_.lens.bytes(), kvs_.lens.bytes());
           // move to the next stage depending on the operation
           if (meta_.op == Operation::PUT) {
+            rx_buffer_ = Buffer(kvs_.lens.data(), kvs_.lens.bytes(), kvs_.lens.bytes());
             rx_stage_ = RxStage::Lens;
           } else if (meta_.op == Operation::GET || meta_.op == Operation::DELETE) {
             // kvpair is finished receiving, pass to the backend storage
-            GetWorkQueue().enqueue((Message){meta_.op, this, kvs_});
+            GetWorkQueue().enqueue({meta_.op, meta_.timestamp, this, kvs_});
             // start over for new request
             PrepareNewReceive();
           }
@@ -179,6 +179,7 @@ void Endpoint::OnRecvReady() {
         }
         case RxStage::Values: {
           rx_value_index_++;
+          CHECK(tx_meta_.op == Operation::GET);
           if (rx_value_index_ < meta_.num_keys) {
             // move the buffer to the next value
             rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
@@ -187,7 +188,7 @@ void Endpoint::OnRecvReady() {
           } else {
             // if the kvpair is finished, pass the entire message to the backend
             // storage
-            GetWorkQueue().enqueue((Message){meta_.op, this, kvs_});
+            GetWorkQueue().enqueue({meta_.op, meta_.timestamp, this, kvs_});
             // start over again
             PrepareNewReceive();
           }
@@ -198,8 +199,6 @@ void Endpoint::OnRecvReady() {
           LOG(FATAL) << "Unexpected state: " << static_cast<int>(rx_stage_);
         }
       }
-
-      continue;
     }
   }
 }
@@ -214,8 +213,9 @@ void Endpoint::PrepareNewReceive() {
 void Endpoint::PrepareNewSend(const Message& msg) {
   tx_stage_ = TxStage::Meta;
   tx_meta_.op = msg.op;
+  tx_meta_.timestamp = msg.timestamp;
   tx_kvs_ = msg.kvs;
-  tx_buffer_ = Buffer(&meta_, sizeof(meta_), sizeof(meta_));
+  tx_buffer_ = Buffer(&tx_meta_, sizeof(tx_meta_), sizeof(tx_meta_));
 }
 
 }  // namespace server

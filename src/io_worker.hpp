@@ -40,6 +40,8 @@ class IoWorker : public TerminableThread {
     return *static_cast<const Context*>(context_);
   }
 
+  inline const size_t GetNumEndpoints() const { return endpoints_.size(); }
+
   void Run() override {
     int timeout_ms =
         prism::GetEnvOrDefault<int>("DIALGA_EPOLL_TIMEOUT_MS", 1000);
@@ -86,10 +88,11 @@ class IoWorker : public TerminableThread {
     }
   }
 
-  void AddNewConnection(TcpSocket new_sock) {
+  std::shared_ptr<Endpoint> AddNewConnection(TcpSocket new_sock) {
     auto endpoint = std::make_shared<Endpoint>(new_sock, *this);
     endpoint->OnEstablished();
     endpoints_[endpoint->fd()] = endpoint;
+    return endpoint;
   }
 
  private:
