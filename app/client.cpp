@@ -1,22 +1,23 @@
 #include <gflags/gflags.h>
+#include <glog/logging.h>
+#include <infiniband/verbs.h>
 #include <malloc.h>
 
-#include <memory>
 #include <algorithm>
 #include <functional>
 #include <iostream>
+#include <memory>
 
-#include <glog/logging.h>
-#include <infiniband/verbs.h>
-
-#include "prism/utils.h"
-#include "dialga/kvstore.hpp"
 #include "dialga/config.hpp"
+#include "dialga/kvstore.hpp"
+#include "prism/utils.h"
 
 using prism::Now64;
 
 volatile bool ready = false;
 int value_length = 128;
+int malloc_buf_size = 655360;
+bool print_kv = true;
 
 DEFINE_bool(validation, false, "Run validation test?");
 DEFINE_bool(latency, false, "Run Latency test?");
@@ -37,7 +38,7 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
   std::vector<dialga::Value> values;
   LOG(INFO) << "Validation starts";
   for (int i = 0; i < num_of_key; i++) {
-    char* buffer = (char*)memalign(sysconf(_SC_PAGESIZE), 4096);
+    char* buffer = (char*)memalign(sysconf(_SC_PAGESIZE), malloc_buf_size);
     memset(buffer, 0, value_length);
     std::string val = RandomString();
     strncpy(buffer, val.c_str(), val.size());
@@ -46,7 +47,8 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
     dialga::Value v((uint64_t)buffer, value_length);
     values.push_back(v);
     keys.push_back(i);
-    LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
+    if (print_kv)
+      LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
   }
   for (int i = 0; i < num_of_key; i++) {
     std::vector<dialga::Key> put_keys;
@@ -67,6 +69,11 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
     while (!ready)
       ;
     char* test_result = (char*)test_values[0]->addr_;
+    if (print_kv) {
+      LOG(INFO) << "Key is " << test_key;
+      LOG(INFO) << "Read result  " << test_result;
+      LOG(INFO) << "The \"answer\" " << buffers[test_key];
+    }
     if (strncmp(test_result, buffers[test_key], value_length) == 0) {
       LOG(INFO) << "Test " << i << " (key = " << test_key << ") passed...";
       ready = false;
@@ -91,6 +98,11 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
     while (!ready)
       ;
     char* test_result = (char*)test_values[0]->addr_;
+    if (print_kv) {
+      LOG(INFO) << "Key is " << test_key;
+      LOG(INFO) << "Read result  " << test_result;
+      LOG(INFO) << "The \"answer\" " << buffers[test_key];
+    }
     if (strncmp(test_result, buffers[test_key], value_length) == 0) {
       LOG(INFO) << "Test " << i << " (key = " << test_key << ") passed...";
       ready = false;
@@ -119,7 +131,7 @@ int LatencyTest(dialga::KVStore* client, int num_of_key, int iters) {
   std::vector<dialga::Value> values;
   LOG(INFO) << "Validation starts";
   for (int i = 0; i < num_of_key; i++) {
-    char* buffer = (char*)memalign(sysconf(_SC_PAGESIZE), 4096);
+    char* buffer = (char*)memalign(sysconf(_SC_PAGESIZE), malloc_buf_size);
     memset(buffer, 0, value_length);
     std::string val = RandomString();
     strncpy(buffer, val.c_str(), val.size());
@@ -128,7 +140,8 @@ int LatencyTest(dialga::KVStore* client, int num_of_key, int iters) {
     dialga::Value v((uint64_t)buffer, value_length);
     values.push_back(v);
     keys.push_back(i);
-    LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
+    if (print_kv)
+      LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
   }
   for (int i = 0; i < num_of_key; i++) {
     std::vector<dialga::Key> put_keys;
@@ -154,7 +167,7 @@ int LatencyTest(dialga::KVStore* client, int num_of_key, int iters) {
     char* test_result = (char*)test_values[0]->addr_;
     if (strncmp(test_result, buffers[test_key], value_length) == 0) {
       // LOG(INFO) << "Test " << i << " (key is " << test_key
-                // << ") success, latency is " << after - before;
+      // << ") success, latency is " << after - before;
       latencies.push_back(after - before);
       ready = false;
     } else {
@@ -183,6 +196,16 @@ int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   auto client = dialga::KVStore::Create(dialga::FLAGS_comm.c_str());
   client->Init();
+  LOG(INFO) << "Please input the value size: ";
+
+  std::cin >> value_length;
+  char c;
+  LOG(INFO) << "Do you want to see the key, value details? [y/n]";
+  std::cin >> c;
+  if (c == 'y')
+    print_kv = true;
+  else
+    print_kv = false;
   if (FLAGS_validation) {
     int batch = 1, iters = 1;
     LOG(INFO) << "Please input the validation parameters: ";
