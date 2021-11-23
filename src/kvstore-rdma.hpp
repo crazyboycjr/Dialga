@@ -105,7 +105,7 @@ class RdmaKVStore : public KVStore {
   int ProcessPutAck(struct ibv_wc* wc);
   int ProcessGetAck(struct ibv_wc* wc);
   int Put(const std::vector<Key>& keys, const std::vector<Value>& values);
-  int Get(const std::vector<Key>& keys, const std::vector<Value*>& values,
+  int Get(const std::vector<Key>& keys, std::vector<Value*>& values,
           const Callback& cb = nullptr);
   // TODO: ibv_reg_mr() does not support const char *buf register
   // TODO: When register, allocate size + control message size.

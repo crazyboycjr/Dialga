@@ -3,6 +3,7 @@
 #include <map>
 #include <memory>
 #include <queue>
+#include <mutex>
 
 #include "dialga/kvstore.hpp"
 #include "prism/thread_proto.h"
@@ -17,16 +18,33 @@ using namespace socket;
 template <typename Endpoint>
 class IoWorker : public TerminableThread {
  public:
-  explicit IoWorker()
-      : listener_{INVALID_SOCKET}, poll_{socket::Poll::Create()} {}
+  explicit IoWorker(void* context)
+      : context_{context},
+        listener_{INVALID_SOCKET},
+        poll_{socket::Poll::Create()} {}
 
-  explicit IoWorker(socket::TcpSocket listener)
-      : listener_{listener}, poll_{socket::Poll::Create()} {
+  explicit IoWorker(void* context, socket::TcpSocket listener)
+      : context_{context}, listener_{listener}, poll_{socket::Poll::Create()} {
     poll_.registry().Register(listener_, Token(listener_.sockfd),
                               Interest::READABLE);
   }
 
   inline socket::Poll& poll() { return poll_; }
+
+  template <typename Context>
+  inline Context& context() {
+    return *static_cast<Context*>(context_);
+  }
+
+  template <typename Context>
+  inline const Context& context() const {
+    return *static_cast<const Context*>(context_);
+  }
+
+  inline const size_t GetNumEndpoints() const {
+    std::lock_guard<std::mutex> lk(mu_);
+    return endpoints_.size();
+  }
 
   void Run() override {
     int timeout_ms =
@@ -68,16 +86,19 @@ class IoWorker : public TerminableThread {
 
         if (ev.IsError() || ev.IsReadClosed() || ev.IsWriteClosed()) {
           endpoint->OnError();
+          std::lock_guard<std::mutex> lk(mu_);
           endpoints_.erase(endpoint->fd());
         }
       }
     }
   }
 
-  void AddNewConnection(TcpSocket new_sock) {
+  std::shared_ptr<Endpoint> AddNewConnection(TcpSocket new_sock) {
+    std::lock_guard<std::mutex> lk(mu_);
     auto endpoint = std::make_shared<Endpoint>(new_sock, *this);
-    endpoint->OnEstablished();
     endpoints_[endpoint->fd()] = endpoint;
+    endpoint->OnEstablished();
+    return endpoint;
   }
 
  private:
@@ -86,9 +107,12 @@ class IoWorker : public TerminableThread {
     AddNewConnection(new_sock);
   }
 
+  // type earsed context.
+  void* context_;
   socket::TcpSocket listener_;
   socket::Poll poll_;
   std::map<socket::RawFd, std::shared_ptr<Endpoint>> endpoints_;
+  mutable std::mutex mu_;
 };
 
 }  // namespace ioworker

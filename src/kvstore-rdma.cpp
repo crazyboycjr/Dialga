@@ -239,7 +239,7 @@ int RdmaKVStore::PrepostProcess(const std::vector<Key>& keys,
 }
 
 int RdmaKVStore::Get(const std::vector<Key>& keys,
-                     const std::vector<Value*>& values, const Callback& cb) {
+                     std::vector<Value*>& values, const Callback& cb) {
   if (keys.size() != values.size()) {
     LOG(ERROR) << "Get() failed due to size mismatch (key & value)";
     return -1;
