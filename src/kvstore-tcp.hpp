@@ -30,8 +30,6 @@ struct OpContext {
   std::atomic<uint32_t> received;
   /*! \brief the callback to run, (Send + Static) */
   Callback cb;
-  /*! \brief lock */
-  std::mutex mu_;
 
   explicit OpContext(uint32_t target, Callback callback) {
     expected = target;
@@ -41,14 +39,8 @@ struct OpContext {
 
   // TODO(cjr): double-check this function.
   inline bool UpdateReceived() {
-    std::lock_guard<std::mutex> lk(mu_);
-    this->received.fetch_add(1);
-    return this->received.load() == this->expected;
-
-    // this->received.fetch_add(1);
-    // auto expected = this->expected - 1;
-    // auto desired = this->expected;
-    // return this->received.compare_exchange_strong(expected, desired);
+    auto last = this->received.fetch_add(1);
+    return last + 1 == this->expected;
   }
 };
 
