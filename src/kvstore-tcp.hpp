@@ -5,9 +5,9 @@
 #include "dialga/range.hpp"
 #include "prism/thread_proto.h"
 #include "prism/spsc_queue.h"
-#include "socket/socket.h"
-#include "socket/poll.h"
-#include "socket/buffer.h"
+#include "./socket/socket.h"
+#include "./socket/poll.h"
+#include "./socket/buffer.h"
 #include "./io_worker.hpp"
 #include "./wire.hpp"
 

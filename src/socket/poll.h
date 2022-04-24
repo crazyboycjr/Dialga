@@ -81,7 +81,7 @@ class Event;
 
 namespace sys {
 
-namespace linux {
+namespace linux_platform {
 inline uint32_t InterestToEpoll(Interest interest) {
   /// EPOLLERR  Error condition happened on the associated file descriptor.  This event is also
   /// reported for the write end of a pipe when the read end has been closed. epoll_wait(2) will
@@ -231,12 +231,12 @@ class Event {
 
 static_assert(sizeof(Event) == sizeof(struct epoll_event));
 
-}  // namespace linux
+}  // namespace linux_platform
 
 #ifdef __linux__
-using RawFd = linux::RawFd;
-using Event = linux::Event;
-using Selector = linux::Selector;
+using RawFd = linux_platform::RawFd;
+using Event = linux_platform::Event;
+using Selector = linux_platform::Selector;
 #elif __FreeBSD__
 using RawFd = freebsd::RawFd;
 using Event = freebsd::Event;

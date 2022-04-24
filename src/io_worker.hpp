@@ -7,8 +7,8 @@
 
 #include "dialga/kvstore.hpp"
 #include "prism/thread_proto.h"
-#include "socket/poll.h"
-#include "socket/socket.h"
+#include "./socket/poll.h"
+#include "./socket/socket.h"
 
 namespace dialga {
 namespace ioworker {
