@@ -20,6 +20,11 @@
 
 namespace dialga {
 
+RdmaKVStore::~RdmaKVStore() {
+  stop_polling_.store(true);
+  polling_thread_.join();
+}
+
 int RdmaKVStore::Init() {
   manager_ = new RdmaManager(FLAGS_dev);
   if (manager_->InitDevice()) {
@@ -31,6 +36,9 @@ int RdmaKVStore::Init() {
     LOG(ERROR) << "RdmaKVStore::InitMemory() failed";
     return -1;
   }
+  // Register the ODP mr
+  odp_mr_ = manager_->RegisterMemory(nullptr, size_t(-1), true);
+
   auto hostvec = GetHostList(FLAGS_connect);
   for (auto host : hostvec) {
     std::string hostname;
@@ -48,7 +56,7 @@ int RdmaKVStore::Init() {
   // Create a pooling thread to handle the poll;
   // There should be ONLY ONE polling thread.
   polling_thread_ = std::thread(&RdmaKVStore::Poll, this);
-  polling_thread_.detach();
+  // polling_thread_.detach();
   LOG(INFO) << "Polling thread starts to busy-polling!";
   return 0;
 }
@@ -91,7 +99,7 @@ int RdmaKVStore::ProcessGetAck(struct ibv_wc* wc) {
 }
 
 void RdmaKVStore::Poll() {
-  while (true) {
+  while (!stop_polling_.load()) {
     if (FLAGS_event) {
       auto ret = manager_->WaitForEvent();
       if (ret < 0) {
@@ -126,9 +134,10 @@ void RdmaKVStore::Poll() {
               // LOG(INFO) << "Poll Send finished " << Now64();
               connections_[client_ctx->conn_id_]->UpdateSendCredits(
                   client_ctx->ref_);
-              if (client_ctx->optype_ == KV_GET) {
+              if (client_ctx->optype_ == KV_GET || client_ctx->optype_ == KV_PUT) {
                 auto vec = *client_ctx->buffers_;
                 for (auto rdma_buffer : vec) manager_->FreeBuffer(rdma_buffer);
+                delete client_ctx->buffers_;
               }
               // LOG(INFO) << "Poll Send after processing " << Now64();
               break;
@@ -334,6 +343,39 @@ int RdmaKVStore::Get(const std::vector<Key>& keys,
   return 0;
 }
 
+// TxMessage* RdmaKVStore::AllocateTxMessages(size_t num) {
+//   pthread_spin_lock(&tx_msgs_lock_);
+//   TxMessage* buf = nullptr;
+//   if (!tx_msgs_freelist_.empty()) {
+//     auto tx_msg = std::move(tx_msgs_freelist_.back());
+//     tx_msgs_freelist_.pop_back();
+//     buf = tx_msg.get();
+//     tx_msgs_pool_[reinterpret_cast<uint64_t>(buf)] =
+//         std::make_tuple(std::move(tx_msg), 0, num);
+//   } else {
+//     buf = static_cast<TxMessage*>(malloc(num * sizeof(TxMessage)));
+//     tx_msgs_pool_[reinterpret_cast<uint64_t>(buf)] =
+//         std::make_tuple(std::unique_ptr<TxMessage>(buf), 0, num);
+//   }
+//   pthread_spin_unlock(&tx_msgs_lock_);
+//   return buf;
+// }
+// 
+// void RdmaKVStore::ReturnTxMessages(TxMessage* tx_msg) {
+//   // TODO(cjr): make sure this function is not called concurrently
+//   pthread_spin_lock(&tx_msgs_lock_);
+//   auto iter = tx_msgs_pool_.find(reinterpret_cast<uint64_t>(tx_msg));
+//   if (iter == tx_msgs_pool_.end()) {
+//     LOG(FATAL) << "impossible";
+//   }
+//   std::get<1>(iter->second) += 1;
+//   if (std::get<1>(iter->second) == std::get<2>(iter->second)) {
+//     tx_msgs_freelist_.push_back(std::move(std::get<0>(iter->second)));
+//     tx_msgs_pool_.erase(iter);
+//   }
+//   pthread_spin_unlock(&tx_msgs_lock_);
+// }
+
 int RdmaKVStore::Put(const std::vector<Key>& keys,
                      const std::vector<Value>& values) {
   // TODO: generate a operation id that denotes this batch
@@ -351,9 +393,16 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
   int to_post = keys.size();
   struct ibv_send_wr wr_list[kMaxConnection][kMaxBatch];
   struct ibv_send_wr* bad_wr;
-  struct ibv_sge sgs[kMaxConnection][kMaxBatch];
+  struct ibv_sge sgs[kMaxConnection][kMaxBatch * 2];
   int wr_index[kMaxConnection];
+  // TxMessage tx_msg_buffers[kMaxConnection][kMaxBatch];
+  // TxMessage* tx_msg_buffers = AllocateTxMessages(kMaxConnection * kMaxBatch);
   memset(wr_index, 0, sizeof(wr_index));
+  std::vector<std::vector<RdmaBuffer*>*> buffers_vecs;
+  // Free if there is no element in it or when the buffers in vector is freed.
+  for (size_t i = 0; i < connections_.size(); i++) {
+    buffers_vecs.push_back(new std::vector<RdmaBuffer*>);
+  }
   //memset(wr_list, 0, sizeof(wr_list));
   //memset(sgs, 0, sizeof(sgs));
   int i = 0;
@@ -361,27 +410,48 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
     // Generate WR at right position
     int conn_idx = conn_ids[i];
     int wr_position = wr_index[conn_idx];
+    int sg_position = wr_position * 2;
     wr_index[conn_idx]++;
     char* buffer = (char*)values[i].addr_;
-    TxMessage* msg_buffer = (TxMessage*)(buffer + values[i].size_);
-    auto iter = memory_regions_.find(values[i].addr_);
-    if (iter == memory_regions_.end()) {
-      LOG(ERROR) << "Values are not registered.";
-      return -1;
+    // TxMessage* msg_buffer = (TxMessage*)(buffer + values[i].size_);
+    // TxMessage* msg_buffer = &tx_msg_buffers[i * kMaxConnection + wr_position];
+
+    RdmaBuffer* rdma_buffer = nullptr;
+    while (!rdma_buffer) {
+      rdma_buffer = manager_->AllocateBuffer(sizeof(TxMessage));
+    }
+    TxMessage* msg_buffer = reinterpret_cast<TxMessage*>(rdma_buffer->addr_);
+    struct ibv_mr* send_mr;
+    if (odp_mr_) {
+      send_mr = odp_mr_;
+    } else {
+      auto iter = memory_regions_.find(values[i].addr_);
+      if (iter == memory_regions_.end()) {
+        LOG(ERROR) << "Values are not registered.";
+        return -1;
+      }
+      send_mr = iter->second;
     }
     msg_buffer->key_ = keys[i];
     msg_buffer->opcode_ = KV_PUT;
-    sgs[conn_idx][wr_position].addr = values[i].addr_;
-    sgs[conn_idx][wr_position].length = values[i].size_ + sizeof(TxMessage);
-    if (sgs[conn_idx][wr_position].length > iter->second->length) {
-      LOG(ERROR) << "Value's length " << sgs[conn_idx][wr_position].length
-                 << " exceed registered buffer size " << iter->second->length;
+    // msg_buffer->alloc_id = reinterpret_cast<uint64_t>(tx_msg_buffers);
+    sgs[conn_idx][sg_position + 1].addr = reinterpret_cast<uint64_t>(msg_buffer);
+    sgs[conn_idx][sg_position + 1].length = sizeof(TxMessage);
+    sgs[conn_idx][sg_position + 1].lkey = send_mr->lkey;
+    sgs[conn_idx][sg_position].addr = values[i].addr_;
+    sgs[conn_idx][sg_position].length = values[i].size_;
+    if (sgs[conn_idx][sg_position].length > send_mr->length) {
+      LOG(ERROR) << "Value's length " << sgs[conn_idx][sg_position].length
+                 << " exceed registered buffer size " << send_mr->length;
       return -1;
     }
     // Message Format: [real value][control message]
-    sgs[conn_idx][wr_position].lkey = iter->second->lkey;
-    wr_list[conn_idx][wr_position].num_sge = 1;
-    wr_list[conn_idx][wr_position].sg_list = &sgs[conn_idx][wr_position];
+    sgs[conn_idx][wr_position].lkey = send_mr->lkey;
+
+    buffers_vecs[conn_idx]->push_back(rdma_buffer);
+
+    wr_list[conn_idx][wr_position].num_sge = 2;
+    wr_list[conn_idx][wr_position].sg_list = &sgs[conn_idx][sg_position];
     wr_list[conn_idx][wr_position].opcode = IBV_WR_SEND_WITH_IMM;
     wr_list[conn_idx][wr_position].imm_data = htonl((uint32_t)KV_PUT);
     i++;
@@ -390,7 +460,8 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
       wr_list[conn_idx][wr_position].next = nullptr;
       wr_list[conn_idx][wr_position].send_flags = IBV_SEND_SIGNALED;
       ClientWrContext* wr_ctx =
-          new ClientWrContext(conn_idx, kMaxBatch, KV_PUT);
+          new ClientWrContext(conn_idx, kMaxBatch, KV_PUT, buffers_vecs[conn_idx]);
+      buffers_vecs[conn_idx] = new std::vector<RdmaBuffer*>;
       wr_list[conn_idx][wr_position].wr_id = (uint64_t)wr_ctx;
       if (ibv_post_send(connections_[conn_idx]->GetQp(), wr_list[conn_idx],
                         &bad_wr)) {
@@ -418,6 +489,8 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
         PLOG(ERROR) << "ibv_post_send() failed for last batch";
         return -1;
       }
+    } else {
+      delete buffers_vecs[j];  // free the vector struct
     }
   }
   // LOG(INFO) << "PUT finished " << Now64();
@@ -468,6 +541,8 @@ int RdmaKVServer::Init() {
     LOG(ERROR) << "RdmaKVServer::InitMemory() failed";
     return -1;
   }
+  // Register the ODP mr
+  odp_mr_ = manager_->RegisterMemory(nullptr, size_t(-1), true);
   // Starting from here.
   polling_thread_ = std::thread(&RdmaKVServer::PollThread, this);
   polling_thread_.detach();

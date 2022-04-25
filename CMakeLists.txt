@@ -18,6 +18,9 @@ FILE(GLOB_RECURSE SOURCE "src/*.cpp")
 set(dialga_LINKER_LIBS_L "")
 set(dialga_INCLUDE_DIR_L "")
 
+# pthread
+list(APPEND dialga_LINKER_LIBS_L pthread)
+
 # gflags
 list(APPEND dialga_LINKER_LIBS_L gflags)
 

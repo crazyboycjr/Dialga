@@ -86,7 +86,7 @@ class RdmaManager {
   RdmaConnection* Connect(std::string host, int port);
   RdmaBuffer* AllocateBuffer(size_t size);
   void FreeBuffer(RdmaBuffer* buf);
-  struct ibv_mr* RegisterMemory(char* buf, size_t size);
+  struct ibv_mr* RegisterMemory(char* buf, size_t size, bool odp = false);
   int WaitForEvent();
 
  private:

@@ -193,9 +193,10 @@ void RdmaManager::FreeBuffer(RdmaBuffer* rdma_buffer) {
   memory_lock_.unlock();
 }
 
-struct ibv_mr* RdmaManager::RegisterMemory(char* buf, size_t size) {
+struct ibv_mr* RdmaManager::RegisterMemory(char* buf, size_t size, bool odp) {
   int mrflags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
                 IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+  if (odp) mrflags |= IBV_ACCESS_ON_DEMAND;
   auto mr = ibv_reg_mr(pd_, buf, size, mrflags);
   if (!mr) {
     PLOG(ERROR) << "ibv_reg_mr() failed";

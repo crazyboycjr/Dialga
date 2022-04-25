@@ -32,6 +32,7 @@ class TxMessage {
   enum KVOpType opcode_;
   // For GET() op
   uint64_t get_ctx_ptr_;
+  // uint64_t alloc_id;
   // uint64_t size;  Should be compute directly from the wr.length -
   // sizeof(TxMessage);
 };
@@ -90,6 +91,7 @@ class ClientWrContext {
 
 class RdmaKVStore : public KVStore {
  public:
+  virtual ~RdmaKVStore();  // return 0 on success. If success, then can Put and Get.
   int Init();  // return 0 on success. If success, then can Put and Get.
   void Poll();
   int PostRecvBatch(int conn_id, int n);
@@ -114,15 +116,26 @@ class RdmaKVStore : public KVStore {
   void Free(Value* value);
   int Delete(const std::vector<Key>& keys, const Callback& cb = nullptr);
 
+  // TxMessage* AllocateTxMessages(size_t num);
+  // void ReturnTxMessages(TxMessage* tx_msg);
+
  private:
   std::unordered_map<Key, IndexEntry> indexs_;
   RdmaManager* manager_ = nullptr;
   std::thread polling_thread_;
+  std::atomic<bool> stop_polling_ {false};
   std::vector<RdmaConnection*> connections_;
   std::unordered_map<uint64_t, struct ibv_mr*> memory_regions_;
   std::unordered_map<Value*, RdmaBuffer*> user_hold_buffers_;
+  // pthread_spinlock_t tx_msgs_lock_;
+  // std::vector<std::unique_ptr<TxMessage>> tx_msgs_freelist_;
+  // // addr -> (msg, cur, total)
+  // std::unordered_map<uint64_t,
+  //                    std::tuple<std::unique_ptr<TxMessage>, size_t, size_t>>
+  //     tx_msgs_pool_;
   uint32_t get_id_ = 0;
   uint32_t index_id_ = 0;
+  struct ibv_mr* odp_mr_ = nullptr;
 };
 
 class RdmaKVServer : public KVServer {
@@ -149,6 +162,7 @@ class RdmaKVServer : public KVServer {
   prism::SpscQueue<struct ibv_wc> wc_queues_;
   std::thread polling_thread_;
   std::thread process_thread_;
+  struct ibv_mr* odp_mr_ = nullptr;
 
   int AcceptHander(int fd, int idx);
   // Post n RdmaBuffer to the QP for receiver
