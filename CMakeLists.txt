@@ -39,8 +39,18 @@ add_library(dialga ${SOURCE})
 include_directories(dialga ${dialga_INCLUDE_DIR_L})
 target_link_libraries(dialga ${dialga_LINKER_LIBS_L})
 
-# exports
 list(APPEND dialga_LINKER_LIBS_L dialga)
-set(dialga_LINKER_LIBS ${dialga_LINKER_LIBS_L} PARENT_SCOPE)
-set(dialga_INCLUDE_DIRS ${dialga_INCLUDE_DIR_L} PARENT_SCOPE)
-set(dialga_LIBRARY_DIRS "${PROJECT_BINARY_DIR}" PARENT_SCOPE)
+
+get_directory_property(hasParent PARENT_DIRECTORY)
+if(NOT hasParent)
+    # build apps
+    set(dialga_LINKER_LIBS ${dialga_LINKER_LIBS_L})
+    set(dialga_INCLUDE_DIRS ${dialga_INCLUDE_DIR_L})
+    set(dialga_LIBRARY_DIRS "${PROJECT_BINARY_DIR}")
+    add_subdirectory(app)
+else()
+    # exports
+    set(dialga_LINKER_LIBS ${dialga_LINKER_LIBS_L} PARENT_SCOPE)
+    set(dialga_INCLUDE_DIRS ${dialga_INCLUDE_DIR_L} PARENT_SCOPE)
+    set(dialga_LIBRARY_DIRS "${PROJECT_BINARY_DIR}" PARENT_SCOPE)
+endif()

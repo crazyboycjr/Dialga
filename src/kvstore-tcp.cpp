@@ -164,12 +164,23 @@ void Endpoint::OnRecvReady() {
 
           CHECK_EQ(it->second.values.size(), meta_.num_keys);
           CHECK(kvs_.values.empty());
+          char* addr = nullptr;
           for (size_t i = 0; i < meta_.num_keys; i++) {
             // lens[i] are in bytes
             size_t len = kvs_.lens[i];
-            char* addr = static_cast<char*>(malloc(len));
-            it->second.values[i]->addr_ = reinterpret_cast<uintptr_t>(addr);
-            it->second.values[i]->size_ = kvs_.lens[i];
+            if (it->second.values[i]->addr_ != 0) {
+              // allocated by the user, so the user is responsible for releasing
+              // the space
+              CHECK_GE(it->second.values[i]->size_, len)
+                  << "not enough space for this value";
+              addr = reinterpret_cast<char*>(it->second.values[i]->addr_);
+            } else {
+              // TODO(cjr): this space is never released
+              // Fix this after forcing the user to use SArray.
+              addr = static_cast<char*>(malloc(len));
+              it->second.values[i]->addr_ = reinterpret_cast<uintptr_t>(addr);
+              it->second.values[i]->size_ = len;
+            }
             auto sarray = SArray<char>(addr, len, false);
             kvs_.values.push_back(sarray);
           }

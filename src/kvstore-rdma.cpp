@@ -78,9 +78,18 @@ int RdmaKVStore::ProcessGetAck(struct ibv_wc* wc) {
                                sizeof(AckMessage));
   auto get_ctx = (GetContext*)ack_msg->get_ctx_ptr_;
   // First, provide the buffer to user
-  get_ctx->value_ptr_->addr_ = recv_ctx->rdma_buffer_->addr_;
-  get_ctx->value_ptr_->size_ = ack_msg->size_;
-  // Second, the value's corresponding rdma_buffer is allocated to users.
+  if (get_ctx->value_ptr_->addr_ != 0) {
+    CHECK_GE(get_ctx->value_ptr_->size_, ack_msg->size_)
+        << "not enough space for this value";
+    // memory copy
+    memcpy(reinterpret_cast<char*>(get_ctx->value_ptr_->addr_),
+           reinterpret_cast<char*>(recv_ctx->rdma_buffer_->addr_),
+           ack_msg->size_);
+  } else {
+    get_ctx->value_ptr_->addr_ = recv_ctx->rdma_buffer_->addr_;
+    get_ctx->value_ptr_->size_ = ack_msg->size_;
+    // Second, the value's corresponding rdma_buffer is allocated to users.
+  }
   user_hold_buffers_.insert({get_ctx->value_ptr_, recv_ctx->rdma_buffer_});
   // Then, decrease ref_ptr, and check if the callback function should be
   // called.
