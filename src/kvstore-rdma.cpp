@@ -61,10 +61,37 @@ int RdmaKVStore::Init() {
   return 0;
 }
 
+void HexDump(uint64_t obj_id, void* ptr, size_t size) {
+  if (size > 32) {
+    size = 32;
+  }
+  LOG(INFO) << "obj_id: " << obj_id;
+  char buf[128];
+  size_t off = 0;
+  for (size_t i = 0; i < size; i++) {
+    off += snprintf(buf + off, 128 - off, "%02hhx ", ((uint8_t*)ptr)[i]);
+  }
+  LOG(INFO) << "addr: " << ptr << ", content: " << buf;
+}
+
+void RunCallback(GetContext* get_ctx) {
+  // This function will only be executed in a single thread.
+  *get_ctx->ref_ptr_ = *get_ctx->ref_ptr_ - 1;
+  if (*get_ctx->ref_ptr_ == 0) {
+    // Call the callback function and destroy the GetContext.
+    if (get_ctx->cb_) get_ctx->cb_();
+    delete get_ctx->ref_ptr_;
+    delete get_ctx;
+  }
+}
+
 int RdmaKVStore::ProcessPutAck(struct ibv_wc* wc) {
   // TODO: update local index hashmap for further write & read
   auto recv_ctx = (ServerWrContext*)wc->wr_id;
-  // auto ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_);
+  auto ack_msg = (AckMessage*)(recv_ctx->rdma_buffer_->addr_);
+  auto get_ctx = (GetContext*)ack_msg->get_ctx_ptr_;
+  RunCallback(get_ctx);
+
   manager_->FreeBuffer(recv_ctx->rdma_buffer_);
   connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
   delete recv_ctx;
@@ -78,19 +105,26 @@ int RdmaKVStore::ProcessGetAck(struct ibv_wc* wc) {
                                sizeof(AckMessage));
   auto get_ctx = (GetContext*)ack_msg->get_ctx_ptr_;
   // First, provide the buffer to user
-  get_ctx->value_ptr_->addr_ = recv_ctx->rdma_buffer_->addr_;
-  get_ctx->value_ptr_->size_ = ack_msg->size_;
-  // Second, the value's corresponding rdma_buffer is allocated to users.
+  if (get_ctx->value_ptr_->addr_ != 0) {
+    CHECK_GE(get_ctx->value_ptr_->size_, ack_msg->size_)
+        << "not enough space for this value";
+    // memory copy
+    memcpy(reinterpret_cast<char*>(get_ctx->value_ptr_->addr_),
+           reinterpret_cast<char*>(recv_ctx->rdma_buffer_->addr_),
+           ack_msg->size_);
+    // LOG(INFO) << "RdmaKVStore::ProcessGetAck";
+    // HexDump(ack_msg->key_,
+    //         reinterpret_cast<char*>(get_ctx->value_ptr_->addr_),
+    //         ack_msg->size_);
+  } else {
+    get_ctx->value_ptr_->addr_ = recv_ctx->rdma_buffer_->addr_;
+    get_ctx->value_ptr_->size_ = ack_msg->size_;
+    // Second, the value's corresponding rdma_buffer is allocated to users.
+  }
   user_hold_buffers_.insert({get_ctx->value_ptr_, recv_ctx->rdma_buffer_});
   // Then, decrease ref_ptr, and check if the callback function should be
   // called.
-  *get_ctx->ref_ptr_ = *get_ctx->ref_ptr_ - 1;
-  if (*get_ctx->ref_ptr_ == 0) {
-    // Call the callback function and destroy the GetContext.
-    if (get_ctx->cb_) get_ctx->cb_();
-    delete get_ctx->ref_ptr_;
-    delete get_ctx;
-  }
+  RunCallback(get_ctx);
   // Finally, update recv credits
   connections_[recv_ctx->conn_id_]->UpdateRecvCredits(1);
   delete recv_ctx;
@@ -254,7 +288,6 @@ int RdmaKVStore::Get(const std::vector<Key>& keys,
     return -1;
   }
   int to_post = keys.size();
-  int get_id = get_id_++;
   std::vector<int> conn_ids;
   if (PrepostProcess(keys, {}, false, conn_ids)) {
     LOG(ERROR) << "PrepostProcess for GET failed";
@@ -285,7 +318,7 @@ int RdmaKVStore::Get(const std::vector<Key>& keys,
       rdma_buffer = manager_->AllocateBuffer(sizeof(TxMessage));
     }
     // auto rdma_buffer = manager_->AllocateBuffer(sizeof(TxMessage));
-    GetContext* get_ctx = new GetContext(ref_ptr, values[i], get_id, i, cb);
+    GetContext* get_ctx = new GetContext(ref_ptr, values[i], cb);
     TxMessage* msg_buffer = (TxMessage*)(rdma_buffer->addr_);
     msg_buffer->key_ = keys[i];
     msg_buffer->opcode_ = KV_GET;
@@ -377,7 +410,8 @@ int RdmaKVStore::Get(const std::vector<Key>& keys,
 // }
 
 int RdmaKVStore::Put(const std::vector<Key>& keys,
-                     const std::vector<Value>& values) {
+                     const std::vector<Value>& values,
+                     const Callback& cb) {
   // TODO: generate a operation id that denotes this batch
   if (keys.size() != values.size()) {
     LOG(ERROR) << "Put() failed due to size mismatch (key & value)";
@@ -405,6 +439,8 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
   }
   //memset(wr_list, 0, sizeof(wr_list));
   //memset(sgs, 0, sizeof(sgs));
+  int* ref_ptr = new int;
+  *ref_ptr = to_post;
   int i = 0;
   while (i < to_post) {
     // Generate WR at right position
@@ -420,6 +456,8 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
     while (!rdma_buffer) {
       rdma_buffer = manager_->AllocateBuffer(sizeof(TxMessage));
     }
+    GetContext* get_ctx = new GetContext(ref_ptr, nullptr, cb);
+
     TxMessage* msg_buffer = reinterpret_cast<TxMessage*>(rdma_buffer->addr_);
     struct ibv_mr* send_mr;
     if (odp_mr_) {
@@ -434,6 +472,7 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
     }
     msg_buffer->key_ = keys[i];
     msg_buffer->opcode_ = KV_PUT;
+    msg_buffer->get_ctx_ptr_ = (uint64_t)get_ctx;
     // msg_buffer->alloc_id = reinterpret_cast<uint64_t>(tx_msg_buffers);
     sgs[conn_idx][sg_position + 1].addr = reinterpret_cast<uint64_t>(msg_buffer);
     sgs[conn_idx][sg_position + 1].length = sizeof(TxMessage);
@@ -446,7 +485,9 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
       return -1;
     }
     // Message Format: [real value][control message]
-    sgs[conn_idx][wr_position].lkey = send_mr->lkey;
+    sgs[conn_idx][sg_position].lkey = send_mr->lkey;
+    // LOG(INFO) << "RdmaKVStore::Put";
+    // HexDump(msg_buffer->key_, (void*)values[i].addr_, values[i].size_);
 
     buffers_vecs[conn_idx]->push_back(rdma_buffer);
 
@@ -498,6 +539,7 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
 }
 
 int RdmaKVStore::Delete(const std::vector<Key>& keys, const Callback& cb) {
+  LOG(WARNING) << "unimplemented";
   return 0;
 }
 
@@ -770,6 +812,8 @@ int RdmaKVServer::ProcessGet(int conn_id, TxMessage* tx_msg,
   // LOG(INFO) << " storage addr is " << (uint64_t)buf;
   // LOG(INFO) << " ack_msg addr is " << (uint64_t)ack_msg;
   // LOG(INFO) << "After process GET " << Now64();
+  // LOG(INFO) << "RdmaKVServer::ProcessGet";
+  // HexDump(tx_msg->key_, buf, entry->value_->size_);
   if (PostSend(conn_id, entry->rdma_buffer_,
                entry->value_->size_ + sizeof(AckMessage), imm_data, KV_GET)) {
     LOG(ERROR)
@@ -804,6 +848,10 @@ int RdmaKVServer::ProcessPut(int conn_id, char* msg_buf, size_t msg_size,
     rkey = entry->rdma_buffer_->rkey_;
   }
   memcpy((void*)addr, msg_buf, msg_size);
+
+  // LOG(INFO) << "RdmaKVServer::ProcessPut";
+  // HexDump(tx_msg->key_, (void*)addr, msg_size);
+
   RdmaBuffer* send_buffer = nullptr;
   while (!send_buffer) {
     send_buffer = manager_->AllocateBuffer(sizeof(AckMessage));
@@ -811,7 +859,7 @@ int RdmaKVServer::ProcessPut(int conn_id, char* msg_buf, size_t msg_size,
   // auto send_buffer = manager_->AllocateBuffer(sizeof(AckMessage));
   AckMessage* ack_msg = (AckMessage*)send_buffer->addr_;
   ack_msg->addr_ = addr;
-  ack_msg->get_ctx_ptr_ = 0;
+  ack_msg->get_ctx_ptr_ = tx_msg->get_ctx_ptr_;
   ack_msg->key_ = tx_msg->key_;
   ack_msg->rkey_ = rkey;
   ack_msg->size_ = msg_size;

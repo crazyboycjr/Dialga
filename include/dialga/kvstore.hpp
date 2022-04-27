@@ -36,8 +36,17 @@ class KVStore {
 
   virtual int Init() = 0;
 
+  /*!
+   * \brief Push a key-value list to the server.
+   *
+   * The callback function is called when the local completion
+   * is generated. The caller must not release memory before that.
+   * TODO(cjr): Ideally, the Value type should be SArray so that
+   * the user need not worry about the lifetime management.
+   */
   virtual int Put(const std::vector<Key>& keys,
-                  const std::vector<Value>& values) = 0;
+                  const std::vector<Value>& values,
+                  const Callback& cb = nullptr) = 0;
 
   /// At least one of these Get or ZGet must be implemented.
   virtual int Get(const std::vector<Key>& keys,

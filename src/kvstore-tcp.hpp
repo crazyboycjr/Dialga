@@ -216,7 +216,8 @@ class KVStoreTcp final : public KVStore {
   int Init() override;
 
   int Put(const std::vector<Key>& keys,
-          const std::vector<Value>& values) override;
+          const std::vector<Value>& values,
+          const Callback& cb = nullptr) override;
 
   int Get(const std::vector<Key>& keys,
           std::vector<Value*>& values,
