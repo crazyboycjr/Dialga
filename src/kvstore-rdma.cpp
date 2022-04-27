@@ -483,7 +483,7 @@ int RdmaKVStore::Put(const std::vector<Key>& keys,
       // there is to flush
       wr_list[j][wr_index[j] - 1].next = nullptr;
       wr_list[j][wr_index[j] - 1].send_flags = IBV_SEND_SIGNALED;
-      ClientWrContext* wr_ctx = new ClientWrContext(j, wr_index[j], KV_PUT);
+      ClientWrContext* wr_ctx = new ClientWrContext(j, wr_index[j], KV_PUT, buffers_vecs[j]);
       wr_list[j][wr_index[j] - 1].wr_id = (uint64_t)wr_ctx;
       if (ibv_post_send(connections_[j]->GetQp(), wr_list[j], &bad_wr)) {
         PLOG(ERROR) << "ibv_post_send() failed for last batch";
