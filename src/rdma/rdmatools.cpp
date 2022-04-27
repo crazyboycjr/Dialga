@@ -51,8 +51,13 @@ size_t RdmaMemory::ShapeSize(size_t size) {
     ret = 8192;
   else if (size <= 65536)
     ret = 65536;
-  else
-    ret = 1048576;  // The largest value's size is limited as 1 MB.
+  else if (size <= 1048576)
+    ret = 1048576;
+  else if (size <= 2097152)
+    ret = 2097152;
+  else {
+    LOG(FATAL) << "The largest value's size is limited as 2 MB.";
+  }
   return ret;
 }
 
