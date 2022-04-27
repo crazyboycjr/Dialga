@@ -41,16 +41,11 @@ class GetContext {
  public:
   int* ref_ptr_;
   Value* value_ptr_;
-  uint32_t batch_id_;
-  uint32_t key_id_;
   Callback cb_;
 
-  GetContext(int* ref_ptr, Value* value_ptr, uint32_t batch_id, uint32_t key_id,
-             Callback cb)
+  GetContext(int* ref_ptr, Value* value_ptr, Callback cb)
       : ref_ptr_(ref_ptr),
         value_ptr_(value_ptr),
-        batch_id_(batch_id),
-        key_id_(key_id),
         cb_(cb) {}
 };
 
@@ -106,7 +101,8 @@ class RdmaKVStore : public KVStore {
   //                 2. post recv requests for each connection.
   int ProcessPutAck(struct ibv_wc* wc);
   int ProcessGetAck(struct ibv_wc* wc);
-  int Put(const std::vector<Key>& keys, const std::vector<Value>& values);
+  int Put(const std::vector<Key>& keys, const std::vector<Value>& values,
+          const Callback& cb = nullptr);
   int Get(const std::vector<Key>& keys, std::vector<Value*>& values,
           const Callback& cb = nullptr);
   // TODO: ibv_reg_mr() does not support const char *buf register
@@ -133,7 +129,6 @@ class RdmaKVStore : public KVStore {
   // std::unordered_map<uint64_t,
   //                    std::tuple<std::unique_ptr<TxMessage>, size_t, size_t>>
   //     tx_msgs_pool_;
-  uint32_t get_id_ = 0;
   uint32_t index_id_ = 0;
   struct ibv_mr* odp_mr_ = nullptr;
 };

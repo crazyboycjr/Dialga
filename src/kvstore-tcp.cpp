@@ -111,6 +111,9 @@ void Endpoint::OnSendReady() {
           } else {
             // change tx_stage to NothingToSend
             tx_stage_ = TxStage::NothingToSend;
+            // Run callback for PUT. TODO(cjr): may move this to after
+            // receiving PUT ACK.
+            RunCallback(tx_meta_.timestamp);
           }
           break;
         }
@@ -204,7 +207,7 @@ void Endpoint::OnRecvReady() {
                                 kvs_.values[rx_value_index_].bytes());
           } else {
             // if the kvpair is finished, pass the entire message to the backend
-            // storage
+            // storage. Run callback for GET.
             RunCallback(meta_.timestamp);
             // start over again
             PrepareNewReceive();
@@ -279,7 +282,8 @@ int KVStoreTcp::Init() {
 }
 
 int KVStoreTcp::Put(const std::vector<Key>& keys,
-                    const std::vector<Value>& values) {
+                    const std::vector<Value>& values,
+                    const Callback& cb) {
   if (keys.size() != values.size()) {
     LOG(ERROR) << "Put() failed due to size mismatch (key & value)";
     return -1;
@@ -299,10 +303,15 @@ int KVStoreTcp::Put(const std::vector<Key>& keys,
     sliced[server_id].values.push_back(sarray);
   }
 
+  uint32_t expected = 0;
+  for (size_t i = 0; i < endpoints_.size(); i++) {
+    expected += sliced[i].keys.empty() ? 0 : 1;
+  }
+
   client::Message msg;
   msg.op = Operation::PUT;
   msg.timestamp = timestamp_++;
-  msg.ctx = nullptr;
+  msg.ctx = new client::OpContext(expected, cb);
   for (size_t i = 0; i < endpoints_.size(); i++) {
     if (sliced[i].keys.empty()) continue;
     msg.kvs = sliced[i];
@@ -349,7 +358,8 @@ int KVStoreTcp::Get(const std::vector<Key>& keys,
 }
 
 int KVStoreTcp::Delete(const std::vector<Key>& keys, const Callback& cb) {
-  LOG(FATAL) << "unimplemented";
+  LOG(WARNING) << "unimplemented";
+  return 0;
 }
 
 int KVStoreTcp::Register(const char* buf, size_t size) {
