@@ -1,0 +1,9 @@
+Dialga
+- rdmav2, odp
+- replace Value with ZValue
+- change vector in API to range/two iterators since they are more general
+- remove register/free
+- remove Value in all API
+- move Value to C_API
+- support Put/Get for single key
+- find a way to support async

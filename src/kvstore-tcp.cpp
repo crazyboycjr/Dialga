@@ -94,9 +94,9 @@ void Endpoint::OnSendReady() {
         }
         case TxStage::Lens: {
           tx_value_index_ = 0;
-          tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_].data(),
-                              tx_kvs_.values[tx_value_index_].bytes(),
-                              tx_kvs_.values[tx_value_index_].bytes());
+          tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_]->data(),
+                              tx_kvs_.values[tx_value_index_]->bytes(),
+                              tx_kvs_.values[tx_value_index_]->bytes());
           tx_stage_ = TxStage::Values;
           break;
         }
@@ -105,9 +105,9 @@ void Endpoint::OnSendReady() {
           CHECK_EQ(tx_meta_.op, Operation::PUT);
           if (tx_value_index_ < tx_meta_.num_keys) {
             // move the buffer to the next value
-            tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_].data(),
-                                tx_kvs_.values[tx_value_index_].bytes(),
-                                tx_kvs_.values[tx_value_index_].bytes());
+            tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_]->data(),
+                                tx_kvs_.values[tx_value_index_]->bytes(),
+                                tx_kvs_.values[tx_value_index_]->bytes());
           } else {
             // change tx_stage to NothingToSend
             tx_stage_ = TxStage::NothingToSend;
@@ -143,6 +143,7 @@ void Endpoint::OnRecvReady() {
           kvs_.keys = SArray<Key>(meta_.num_keys);
           kvs_.lens = SArray<uint32_t>(meta_.num_keys);
           kvs_.values.clear();
+          kvs_.values.reserve(meta_.num_keys);
           rx_buffer_ = Buffer(kvs_.keys.data(), kvs_.keys.bytes(), kvs_.keys.bytes());
           rx_stage_ = RxStage::Keys;
 
@@ -165,34 +166,29 @@ void Endpoint::OnRecvReady() {
             LOG(FATAL) << "State not found, timestamp: " << meta_.timestamp;
           }
 
-          CHECK_EQ(it->second.values.size(), meta_.num_keys);
+          CHECK_EQ(it->second.kvs.values.size(), meta_.num_keys);
           CHECK(kvs_.values.empty());
           char* addr = nullptr;
           for (size_t i = 0; i < meta_.num_keys; i++) {
             // lens[i] are in bytes
             size_t len = kvs_.lens[i];
-            if (it->second.values[i]->addr_ != 0) {
+            ZValue* sarray = it->second.kvs.values[i];
+            if (sarray->bytes() > 0) {
               // allocated by the user, so the user is responsible for releasing
               // the space
-              CHECK_GE(it->second.values[i]->size_, len)
-                  << "not enough space for this value";
-              addr = reinterpret_cast<char*>(it->second.values[i]->addr_);
+              CHECK_GE(sarray->bytes(), len)
+                  << "the user must reserve enough space for this value";
             } else {
-              // TODO(cjr): this space is never released
-              // Fix this after forcing the user to use SArray.
-              addr = static_cast<char*>(malloc(len));
-              it->second.values[i]->addr_ = reinterpret_cast<uintptr_t>(addr);
-              it->second.values[i]->size_ = len;
+              sarray->resize(len);
             }
-            auto sarray = SArray<char>(addr, len, false);
             kvs_.values.push_back(sarray);
           }
 
           rx_value_index_ = 0;
           // update the buffer to the first value
-          rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
-                              kvs_.values[rx_value_index_].bytes(),
-                              kvs_.values[rx_value_index_].bytes());
+          rx_buffer_ = Buffer(kvs_.values[rx_value_index_]->data(),
+                              kvs_.values[rx_value_index_]->bytes(),
+                              kvs_.values[rx_value_index_]->bytes());
           // move to the next stage
           rx_stage_ = RxStage::Values;
           break;
@@ -202,9 +198,9 @@ void Endpoint::OnRecvReady() {
           CHECK_EQ(meta_.op, Operation::GET);
           if (rx_value_index_ < meta_.num_keys) {
             // move the buffer to the next value
-            rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
-                                kvs_.values[rx_value_index_].bytes(),
-                                kvs_.values[rx_value_index_].bytes());
+            rx_buffer_ = Buffer(kvs_.values[rx_value_index_]->data(),
+                                kvs_.values[rx_value_index_]->bytes(),
+                                kvs_.values[rx_value_index_]->bytes());
           } else {
             // if the kvpair is finished, pass the entire message to the backend
             // storage. Run callback for GET.
@@ -237,7 +233,7 @@ void Endpoint::PrepareNewSend(const Message& msg) {
 }
 
 void Endpoint::AddCallback(const Message& msg) {
-  ctx_table_[msg.timestamp] = {msg.ctx, msg.values};
+  ctx_table_[msg.timestamp] = msg;
 }
 
 void Endpoint::RunCallback(uint64_t timestamp) {
@@ -249,7 +245,9 @@ void Endpoint::RunCallback(uint64_t timestamp) {
   auto ctx = it->second.ctx;
   if (ctx && ctx->UpdateReceived()) {
     if (ctx->cb) ctx->cb();
+    delete ctx;
   }
+  ctx_table_.erase(it);
 }
 
 }  // namespace client
@@ -282,7 +280,7 @@ int KVStoreTcp::Init() {
 }
 
 int KVStoreTcp::Put(const std::vector<Key>& keys,
-                    const std::vector<Value>& values,
+                    const std::vector<ZValue>& values,
                     const Callback& cb) {
   if (keys.size() != values.size()) {
     LOG(ERROR) << "Put() failed due to size mismatch (key & value)";
@@ -295,11 +293,10 @@ int KVStoreTcp::Put(const std::vector<Key>& keys,
   sliced.resize(endpoints_.size());
   for (size_t i = 0; i < keys.size(); i++) {
     auto key = keys[i];
-    auto sarray = SArray<char>(reinterpret_cast<char*>(values[i].addr_),
-                               values[i].size_, false);
+    auto sarray = new SArray<char>(values[i]);
     size_t server_id = key % endpoints_.size();
     sliced[server_id].keys.push_back(key);
-    sliced[server_id].lens.push_back(sarray.bytes());
+    sliced[server_id].lens.push_back(sarray->bytes());
     sliced[server_id].values.push_back(sarray);
   }
 
@@ -314,18 +311,22 @@ int KVStoreTcp::Put(const std::vector<Key>& keys,
   msg.ctx = new client::OpContext(expected, cb);
   for (size_t i = 0; i < endpoints_.size(); i++) {
     if (sliced[i].keys.empty()) continue;
-    msg.kvs = sliced[i];
-    endpoints_[i]->tx_queue().Push(msg);
+    msg.kvs = std::move(sliced[i]);
+    endpoints_[i]->tx_queue().Push(std::move(msg));
   }
 
   return 0;
 }
 
-int KVStoreTcp::Get(const std::vector<Key>& keys,
-                    std::vector<Value*>& values, const Callback& cb) {
-  if (keys.size() != values.size()) {
-    LOG(ERROR) << "Get() failed due to size mismatch (key & value)";
+int KVStoreTcp::ZGet(const std::vector<Key>& keys,
+                     std::vector<ZValue*>* values, const Callback& cb) {
+  if (!values) {
+    LOG(ERROR) << "Invalid argument: values is null";
     return -1;
+  }
+  if (keys.size() != values->size()) {
+    LOG(ERROR) << "Get() failed due to size mismatch (key & value)";
+    return -2;
   }
   CHECK(!endpoints_.empty());
 
@@ -333,9 +334,15 @@ int KVStoreTcp::Get(const std::vector<Key>& keys,
   std::vector<KVPairs> sliced;
   sliced.resize(endpoints_.size());
   for (size_t i = 0; i < keys.size(); i++) {
+    if (!(*values)[i]) {
+      (*values)[i] = new SArray<char>();
+    }
     auto key = keys[i];
+    auto val = (*values)[i];
     size_t server_id = key % endpoints_.size();
     sliced[server_id].keys.push_back(key);
+    sliced[server_id].lens.push_back(val->bytes());
+    sliced[server_id].values.push_back(val);
   }
 
   uint32_t expected = 0;
@@ -347,11 +354,10 @@ int KVStoreTcp::Get(const std::vector<Key>& keys,
   msg.op = Operation::GET;
   msg.timestamp = timestamp_++;
   msg.ctx = new client::OpContext(expected, cb);
-  msg.values = values;
   for (size_t i = 0; i < endpoints_.size(); i++) {
     if (sliced[i].keys.empty()) continue;
-    msg.kvs = sliced[i];
-    endpoints_[i]->tx_queue().Push(msg);
+    msg.kvs = std::move(sliced[i]);
+    endpoints_[i]->tx_queue().Push(std::move(msg));
   }
 
   return 0;

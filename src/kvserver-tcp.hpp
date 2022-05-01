@@ -151,7 +151,7 @@ class KVServerTcp final : public KVServer {
   std::vector<std::unique_ptr<ioworker::IoWorker<server::Endpoint>>>
       io_workers_;
 
-  std::unordered_map<Key, SArray<char>> storage_;
+  std::unordered_map<Key, SArray<char>*> storage_;
 };
 
 }  // namespace dialga

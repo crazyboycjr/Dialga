@@ -37,7 +37,6 @@ struct OpContext {
     cb = callback;
   }
 
-  // TODO(cjr): double-check this function.
   inline bool UpdateReceived() {
     auto last = this->received.fetch_add(1);
     return last + 1 == this->expected;
@@ -47,15 +46,8 @@ struct OpContext {
 struct Message {
   Operation op;
   uint64_t timestamp;
+  OpContext* ctx;
   KVPairs kvs;
-  // These two fields are only for GET.
-  OpContext* ctx;
-  std::vector<Value*> values;
-};
-
-struct OpState {
-  OpContext* ctx;
-  std::vector<Value*> values;
 };
 
 enum class TxStage {
@@ -111,9 +103,14 @@ class Endpoint {
   TxQueue tx_queue_;
   Interest interest_;
 
-  // timestamp -> (ctx, values)
-  std::unordered_map<uint64_t, OpState>
+  // timestamp -> Message
+  std::unordered_map<uint64_t, Message>
       ctx_table_;
+
+  /*! \brief the current sending message */
+  Message* cur_tx_;
+  /*! \brief the current receiving message */
+  Message* cur_rx_;
 
   /*! \brief the current tranmission stage */
   TxStage tx_stage_;
@@ -216,12 +213,12 @@ class KVStoreTcp final : public KVStore {
   int Init() override;
 
   int Put(const std::vector<Key>& keys,
-          const std::vector<Value>& values,
+          const std::vector<ZValue>& values,
           const Callback& cb = nullptr) override;
 
-  int Get(const std::vector<Key>& keys,
-          std::vector<Value*>& values,
-          const Callback& cb = nullptr) override;
+  int ZGet(const std::vector<Key>& keys,
+           std::vector<ZValue*>* values,
+           const Callback& cb = nullptr) override;
 
   int Delete(const std::vector<Key>& keys,
              const Callback& cb = nullptr) override;

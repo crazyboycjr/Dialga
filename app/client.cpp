@@ -25,9 +25,10 @@ DEFINE_bool(latency, false, "Run Latency test?");
 void GetCallBack() { ready = true; }
 
 std::string RandomString() {
-  std::string res = "";
+  std::string res;
+  res.reserve(value_length);
   for (int i = 0; i < value_length; i++) {
-    res += (char)((random() % 35) + 65);
+    res.push_back((char)((random() % 35) + 65));
   }
   return res;
 }
@@ -35,16 +36,15 @@ std::string RandomString() {
 int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
   std::vector<char*> buffers;
   std::vector<dialga::Key> keys;
-  std::vector<dialga::Value> values;
+  std::vector<dialga::ZValue> values;
   LOG(INFO) << "Validation starts";
   for (int i = 0; i < num_of_key; i++) {
     char* buffer = (char*)memalign(sysconf(_SC_PAGESIZE), malloc_buf_size);
     memset(buffer, 0, value_length);
     std::string val = RandomString();
     strncpy(buffer, val.c_str(), val.size());
-    client->Register(buffer, value_length);
     buffers.push_back(buffer);
-    dialga::Value v((uint64_t)buffer, value_length);
+    dialga::ZValue v(buffer, value_length, false);
     values.push_back(v);
     keys.push_back(i);
     if (print_kv)
@@ -52,7 +52,7 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
   }
   for (int i = 0; i < num_of_key; i++) {
     std::vector<dialga::Key> put_keys;
-    std::vector<dialga::Value> put_values;
+    std::vector<dialga::ZValue> put_values;
     put_keys.push_back(keys[i]);
     put_values.push_back(values[i]);
     client->Put(put_keys, put_values);
@@ -61,19 +61,14 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
   LOG(INFO) << "Full Key testing starts: ";
   for (int i = 0; i < num_of_key; i++) {
     std::vector<dialga::Key> test_keys;
-    std::vector<dialga::Value*> test_values;
+    std::vector<dialga::ZValue*> test_values;
     int test_key = i;
     test_keys.push_back(i);
-    auto value = new dialga::Value(0, 0);
-    value->addr_ = reinterpret_cast<uint64_t>(malloc(value_length));
-    value->size_ = value_length;
-    CHECK(!client->Register(reinterpret_cast<char*>(value->addr_), value->size_));
-    // test_values.push_back(new dialga::Value(0, 0));
-    test_values.push_back(value);
-    client->Get(test_keys, test_values, GetCallBack);
+    test_values.push_back(nullptr);
+    client->ZGet(test_keys, &test_values, GetCallBack);
     while (!ready)
       ;
-    char* test_result = (char*)test_values[0]->addr_;
+    char* test_result = test_values[0]->data();
     if (print_kv) {
       LOG(INFO) << "Key is " << test_key;
       LOG(INFO) << "Read result  " << test_result;
@@ -88,27 +83,19 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
                  << buffers[test_key];
       break;
     }
-    client->Free(test_values[0]);
-    free(reinterpret_cast<char*>(test_values[0]->addr_));
     delete test_values[0];
   }
   LOG(INFO) << "Full Key testing over...";
   LOG(INFO) << "Random Key testing starts:";
   for (int i = 0; i < testnum; i++) {
-    std::vector<dialga::Key> test_keys;
-    std::vector<dialga::Value*> test_values;
-    int test_key = (random() % num_of_key);
-    test_keys.push_back(test_key);
-    auto value = new dialga::Value(0, 0);
-    value->addr_ = reinterpret_cast<uint64_t>(malloc(value_length));
-    value->size_ = value_length;
-    CHECK(!client->Register(reinterpret_cast<char*>(value->addr_), value->size_));
-    // test_values.push_back(new dialga::Value(0, 0));
-    test_values.push_back(value);
-    client->Get(test_keys, test_values, GetCallBack);
+    dialga::Key test_key = (dialga::Key)random() % num_of_key;
+    std::vector<dialga::Key> test_keys = {test_key};
+    std::vector<dialga::ZValue*> test_values{
+        new dialga::SArray<char>(value_length)};
+    client->ZGet(test_keys, &test_values, GetCallBack);
     while (!ready)
       ;
-    char* test_result = (char*)test_values[0]->addr_;
+    char* test_result = test_values[0]->data();
     if (print_kv) {
       LOG(INFO) << "Key is " << test_key;
       LOG(INFO) << "Read result  " << test_result;
@@ -128,61 +115,52 @@ int Validation(dialga::KVStore* client, int num_of_key, int testnum) {
       }
       break;
     }
-    client->Free(test_values[0]);
-    free(reinterpret_cast<char*>(test_values[0]->addr_));
     delete test_values[0];
   }
   LOG(INFO) << "Random Key testing over...";
   LOG(INFO) << "Testing over....";
+  for (auto buf : buffers) delete buf;
   return 0;
 }
 
 int LatencyTest(dialga::KVStore* client, int num_of_key, int iters) {
   std::vector<char*> buffers;
   std::vector<dialga::Key> keys;
-  std::vector<dialga::Value> values;
+  std::vector<dialga::ZValue> values;
   LOG(INFO) << "Validation starts";
   for (int i = 0; i < num_of_key; i++) {
-    char* buffer = (char*)memalign(sysconf(_SC_PAGESIZE), malloc_buf_size);
-    memset(buffer, 0, value_length);
-    std::string val = RandomString();
-    strncpy(buffer, val.c_str(), val.size());
-    client->Register(buffer, value_length);
-    buffers.push_back(buffer);
-    dialga::Value v((uint64_t)buffer, value_length);
-    values.push_back(v);
+    std::string s = RandomString();
+    dialga::ZValue val(value_length);
+    val.CopyFrom(s.begin(), s.end());
     keys.push_back(i);
+    values.push_back(std::move(val));
     if (print_kv)
-      LOG(INFO) << "key, value pair generated: " << keys[i] << " " << buffer;
+      LOG(INFO) << "key, value pair generated: " << keys[i] << " " << s;
   }
-  for (int i = 0; i < num_of_key; i++) {
-    std::vector<dialga::Key> put_keys;
-    std::vector<dialga::Value> put_values;
-    put_keys.push_back(keys[i]);
-    put_values.push_back(values[i]);
-    client->Put(put_keys, put_values);
-  }
+  // PUT prepared key values
+  ready = false;
+  CHECK(!client->Put(keys, values, GetCallBack)) << "Put failed";
+  while (!ready)
+    ;
+  // start latency test until initial puts are done
   LOG(INFO) << "Client PUT finished. Starting Latency testing (we only test "
                "GET currently)";
+
   std::vector<uint64_t> latencies;
   for (int i = 0; i < iters; i++) {
     std::vector<dialga::Key> test_keys;
-    std::vector<dialga::Value*> test_values;
+    std::vector<dialga::ZValue*> test_values;
     int test_key = (random() % num_of_key);
     test_keys.push_back(test_key);
-    auto value = new dialga::Value(0, 0);
-    value->addr_ = reinterpret_cast<uint64_t>(malloc(value_length));
-    value->size_ = value_length;
-    CHECK(!client->Register(reinterpret_cast<char*>(value->addr_), value->size_));
-    // test_values.push_back(new dialga::Value(0, 0));
-    test_values.push_back(value);
+    auto value = new dialga::SArray<char>(value_length);
+    test_values.push_back(std::move(value));
     auto before = Now64();
-    client->Get(test_keys, test_values, GetCallBack);
+    client->ZGet(test_keys, &test_values, GetCallBack);
     while (!ready)
       ;
     auto after = Now64();
-    char* test_result = (char*)test_values[0]->addr_;
-    if (strncmp(test_result, buffers[test_key], value_length) == 0) {
+    char* test_result = test_values[0]->data();
+    if (strncmp(test_result, values[test_key].data(), value_length) == 0) {
       // LOG(INFO) << "Test " << i << " (key is " << test_key
       // << ") success, latency is " << after - before;
       latencies.push_back(after - before);
@@ -190,11 +168,9 @@ int LatencyTest(dialga::KVStore* client, int num_of_key, int iters) {
     } else {
       LOG(ERROR) << "Test " << i << " failed. Key is " << test_key
                  << "; Read value is " << test_result << " , actual value is "
-                 << buffers[test_key];
+                 << values[test_key].data();
       break;
     }
-    client->Free(test_values[0]);
-    free(reinterpret_cast<char*>(test_values[0]->addr_));
     delete test_values[0];
   }
   std::sort(latencies.begin(), latencies.end());

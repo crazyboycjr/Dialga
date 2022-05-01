@@ -102,9 +102,9 @@ void Endpoint::OnSendReady() {
         }
         case TxStage::Lens: {
           tx_value_index_ = 0;
-          tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_].data(),
-                              tx_kvs_.values[tx_value_index_].bytes(),
-                              tx_kvs_.values[tx_value_index_].bytes());
+          tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_]->data(),
+                              tx_kvs_.values[tx_value_index_]->bytes(),
+                              tx_kvs_.values[tx_value_index_]->bytes());
           tx_stage_ = TxStage::Values;
           break;
         }
@@ -112,9 +112,9 @@ void Endpoint::OnSendReady() {
           tx_value_index_++;
           if (tx_value_index_ < tx_meta_.num_keys) {
             // move the buffer to the next value
-            tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_].data(),
-                                tx_kvs_.values[tx_value_index_].bytes(),
-                                tx_kvs_.values[tx_value_index_].bytes());
+            tx_buffer_ = Buffer(tx_kvs_.values[tx_value_index_]->data(),
+                                tx_kvs_.values[tx_value_index_]->bytes(),
+                                tx_kvs_.values[tx_value_index_]->bytes());
           } else {
             // change tx_stage to NothingToSend
             tx_stage_ = TxStage::NothingToSend;
@@ -172,13 +172,13 @@ void Endpoint::OnRecvReady() {
           // allocate space for values
           kvs_.values.resize(meta_.num_keys);
           for (uint32_t i = 0; i < meta_.num_keys; i++) {
-            kvs_.values[i] = SArray<char>(kvs_.lens[i] / sizeof(char));
+            kvs_.values[i] = new SArray<char>(kvs_.lens[i] / sizeof(char));
           }
           rx_value_index_ = 0;
           // update the buffer to the first value
-          rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
-                              kvs_.values[rx_value_index_].bytes(),
-                              kvs_.values[rx_value_index_].bytes());
+          rx_buffer_ = Buffer(kvs_.values[rx_value_index_]->data(),
+                              kvs_.values[rx_value_index_]->bytes(),
+                              kvs_.values[rx_value_index_]->bytes());
           // move to the next stage
           rx_stage_ = RxStage::Values;
           break;
@@ -188,9 +188,9 @@ void Endpoint::OnRecvReady() {
           CHECK_EQ(meta_.op, Operation::PUT);
           if (rx_value_index_ < meta_.num_keys) {
             // move the buffer to the next value
-            rx_buffer_ = Buffer(kvs_.values[rx_value_index_].data(),
-                                kvs_.values[rx_value_index_].bytes(),
-                                kvs_.values[rx_value_index_].bytes());
+            rx_buffer_ = Buffer(kvs_.values[rx_value_index_]->data(),
+                                kvs_.values[rx_value_index_]->bytes(),
+                                kvs_.values[rx_value_index_]->bytes());
           } else {
             // if the kvpair is finished, pass the entire message to the backend
             // storage
@@ -300,7 +300,7 @@ void KVServerTcp::MainLoop() {
           CHECK_EQ(kvs.keys.size(), kvs.values.size());
           for (size_t i = 0; i < kvs.keys.size(); i++) {
             auto key = kvs.keys[i];
-            storage_[key] = SArray(kvs.values[i]);
+            storage_[key] = kvs.values[i];
           }
           // PUT does not send response back
           break;
@@ -314,11 +314,11 @@ void KVServerTcp::MainLoop() {
           for (size_t i = 0; i < kvs.keys.size(); i++) {
             auto key = kvs.keys[i];
             auto value = storage_[key];
-            kvs.lens.push_back(value.bytes());
+            kvs.lens.push_back(value->bytes());
             kvs.values.push_back(value);
           }
           // GET sends back the msg to the tx_queue of the endpoint
-          endpoint->tx_queue().Push(msg);
+          endpoint->tx_queue().Push(std::move(msg));
           endpoint->NotifyWork();
           break;
         }

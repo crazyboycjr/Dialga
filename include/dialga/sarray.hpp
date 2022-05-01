@@ -95,10 +95,9 @@ class SArray {
    *
    * \param data the source data
    * \param size the length
-   * \param deletable whether or not can call `delete [] data` when the
-   * reference count goes 0
+   * \param deletable whether or not can call `Allocator::Free(data)` when
+   * the reference count goes 0
    */
-
   SArray(V* data, size_t size, bool deletable = false) {
     if (deletable) {
       reset(data, size, [](V* data) { Allocator::Free(data); });

@@ -29,7 +29,7 @@ static_assert(sizeof(KVMeta) == 16, "sizeof(KVMeta) != 16");
 struct KVPairs {
   SArray<Key> keys;
   SArray<uint32_t> lens;
-  std::vector<SArray<char>> values;
+  SArray<ZValue*> values;
 
   explicit KVPairs() {}
 

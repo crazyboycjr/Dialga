@@ -43,32 +43,44 @@ class KVStore {
    * is generated. The caller must not release memory before that.
    * TODO(cjr): Ideally, the Value type should be SArray so that
    * the user need not worry about the lifetime management.
+   *
+   * The callback function will be invoked when the values are ready.
+   * @param list of keys
+   * @param list of values
+   * @return 0 for success, otherwise it returns an error code.
    */
   virtual int Put(const std::vector<Key>& keys,
-                  const std::vector<Value>& values,
+                  const std::vector<ZValue>& values,
                   const Callback& cb = nullptr) = 0;
 
-  /// At least one of these Get or ZGet must be implemented.
-  virtual int Get(const std::vector<Key>& keys,
-                  std::vector<Value*>& values,
-                  const Callback& cb = nullptr) = 0;
+  // TODO(cjr): Extend kvstore APIs, maybe class KVStoreExt: public KVStore;
+  // virtual int PutSync(const std::vector<Key>& keys,
+  //                     const std::vector<Value>& values) = 0;
 
+  // virtual int PutOne(const Key key,
+  //                    const Value& values,
+  //                    const Callback& cb = nullptr) = 0;
+
+  /*!
+   * \brief Get the values given the list of keys from the server.
+   *
+   * If the user does not specify the space for values, the user should
+   * pass a list of nullptrs. The list of values should have the exact same
+   * length as the keys. Alternatively, the user can pre-allocate the space
+   * for those values. In this case, the data will be directly put in
+   * the addresses specified by the user. In both cases, the user must free
+   * the memory of values.
+   *
+   * The callback function will be invoked when the values are ready.
+   *
+   * At least one of these Get or ZGet must be implemented.
+   * @param list of keys
+   * @param list of values
+   * @return 0 for success, otherwise it returns an error code.
+   */
   virtual int ZGet(const std::vector<Key>& keys,
-                   std::vector<ZValue*>& zvalues,
-                   const Callback& cb = nullptr) {
-    std::vector<Value*> values;
-    values.reserve(zvalues.size());
-    for (size_t i = 0; i < values.size(); i++) {
-      values.push_back(new Value(0, 0));
-    }
-    int rc = Get(keys, values, cb);
-    if (rc) return rc;
-    for (size_t i = 0; i < zvalues.size(); i++) {
-      zvalues[i] = new SArray<char>(reinterpret_cast<char*>(values[i]->addr_),
-                                    values[i]->size_, false);
-    }
-    return 0;
-  }
+                   std::vector<ZValue*>* zvalues,
+                   const Callback& cb = nullptr) = 0;
 
   virtual int Delete(const std::vector<Key>& keys,
                      const Callback& cb = nullptr) = 0;
