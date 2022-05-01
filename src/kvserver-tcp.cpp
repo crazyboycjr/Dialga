@@ -189,6 +189,7 @@ void Endpoint::OnRecvReady() {
               // if the key already exists, and the space is enough, put it in
               // the existing space
               kvs_.values[i] = it->second;
+              // TODO(cjr): make sure the reference count is 1 for values[i]
               kvs_.values[i]->resize(kvs_.lens[i]);
             } else {
               // kvs_.values[i] = new SArray<char>(kvs_.lens[i] / sizeof(char));

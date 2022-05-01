@@ -179,7 +179,11 @@ void Endpoint::OnRecvReady() {
               CHECK_GE(sarray->bytes(), len)
                   << "the user must reserve enough space for this value";
             } else {
-              sarray->resize(len);
+              // sarray->resize(len);
+              char* ptr = SArray<char>::allocator::Alloc(len);
+              sarray->reset(ptr, len, [](char* data) {
+                SArray<char>::allocator::Free(data);
+              });
             }
             kvs_.values.push_back(sarray);
           }
