@@ -32,13 +32,8 @@ class IoWorker : public TerminableThread {
   inline socket::Poll& poll() { return poll_; }
 
   template <typename Context>
-  inline Context& context() {
-    return *static_cast<Context*>(context_);
-  }
-
-  template <typename Context>
-  inline const Context& context() const {
-    return *static_cast<const Context*>(context_);
+  inline Context* context() {
+    return static_cast<Context*>(context_);
   }
 
   inline const size_t GetNumEndpoints() const {

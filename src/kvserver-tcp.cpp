@@ -47,8 +47,8 @@ SockAddr Endpoint::GetPeerAddr() {
   return SockAddr(sockaddr, len);
 }
 
-WorkQueue& Endpoint::GetWorkQueue() {
-  return io_worker_.context<KVServerTcp>().work_queue();
+KVServerTcp* Endpoint::GetKVServer() {
+  return io_worker_.context<KVServerTcp>();
 }
 
 void Endpoint::NotifyWork() {
@@ -60,12 +60,15 @@ void Endpoint::NotifyWork() {
   }
 }
 
+bool Endpoint::Overloaded() {
+  return tx_queue().size() >= 1024;
+}
+
 void Endpoint::OnSendReady() {
   // Send until there's nothing in the TxQueue
   while (true) {
     if (tx_stage_ == TxStage::NothingToSend) {
-      Message msg;
-      if (!tx_queue_.TryPop(&msg)) {
+      if (tx_queue_.empty()) {
         if (interest_.IsWritable()) {
           // remove this endpoint from the writable interested set, saving CPU,
           // but will increase latency.
@@ -76,7 +79,9 @@ void Endpoint::OnSendReady() {
         return;
       }
 
+      Message& msg = tx_queue_.front();
       PrepareNewSend(msg);
+      tx_queue_.pop();
     }
 
     // to this point, there must be something ready to send in the tx_buffer_
@@ -132,6 +137,10 @@ void Endpoint::OnSendReady() {
 
 void Endpoint::OnRecvReady() {
   while (true) {
+    if (Overloaded()) {
+      return;
+    }
+
     ssize_t nbytes = sock_.Recv(rx_buffer_.Chunk(), rx_buffer_.Remaining());
 
     if (nbytes <= 0) {
@@ -161,7 +170,8 @@ void Endpoint::OnRecvReady() {
             rx_stage_ = RxStage::Lens;
           } else if (meta_.op == Operation::GET || meta_.op == Operation::DELETE) {
             // kvpair is finished receiving, pass to the backend storage
-            GetWorkQueue().enqueue({meta_.op, meta_.timestamp, this, kvs_});
+            Message msg = {meta_.op, meta_.timestamp, this, kvs_};
+            GetKVServer()->ProcessMsg(msg, this);
             // start over for new request
             PrepareNewReceive();
           }
@@ -171,9 +181,23 @@ void Endpoint::OnRecvReady() {
         case RxStage::Lens: {
           // allocate space for values
           kvs_.values.resize(meta_.num_keys);
-          for (uint32_t i = 0; i < meta_.num_keys; i++) {
-            kvs_.values[i] = new SArray<char>(kvs_.lens[i] / sizeof(char));
+          uint32_t i = 0;
+          for (std::lock_guard<std::mutex> lk(GetKVServer()->mu_);
+               i < meta_.num_keys; i++) {
+            auto it = GetKVServer()->storage_.find(kvs_.keys[i]);
+            if (it != GetKVServer()->storage_.end()) {
+              // if the key already exists, and the space is enough, put it in
+              // the existing space
+              kvs_.values[i] = it->second;
+              kvs_.values[i]->resize(kvs_.lens[i]);
+            } else {
+              // kvs_.values[i] = new SArray<char>(kvs_.lens[i] / sizeof(char));
+              // bypass the memset for performance
+              char* ptr = SArray<char>::allocator::Alloc(kvs_.lens[i]);
+              kvs_.values[i] = new SArray<char>(ptr, kvs_.lens[i], true);
+            }
           }
+
           rx_value_index_ = 0;
           // update the buffer to the first value
           rx_buffer_ = Buffer(kvs_.values[rx_value_index_]->data(),
@@ -194,7 +218,8 @@ void Endpoint::OnRecvReady() {
           } else {
             // if the kvpair is finished, pass the entire message to the backend
             // storage
-            GetWorkQueue().enqueue({meta_.op, meta_.timestamp, this, kvs_});
+            Message msg = {meta_.op, meta_.timestamp, this, kvs_};
+            GetKVServer()->ProcessMsg(msg, this);
             // start over again
             PrepareNewReceive();
           }
@@ -260,7 +285,6 @@ int KVServerTcp::ExitHandler(int sig, void* app_ctx) {
     return 0;
   }
   LOG(INFO) << "signal " << sig << " received, exiting...";
-  inst->terminated_.store(true);
   for (auto& io_worker : inst->io_workers_) {
     io_worker->Terminate();
   }
@@ -278,59 +302,59 @@ int KVServerTcp::Run() {
     io_worker->Start();
   }
 
-  MainLoop();
-
   // Wait for all the IoWorkers to finish.
   for (auto& io_worker : io_workers_) {
     io_worker->Join();
   }
+
   return 0;
 }
 
-void KVServerTcp::MainLoop() {
-  using namespace server;
-  Message msg;
-  while (!terminated_.load()) {
-    bool found = work_queue_.try_dequeue(msg);
-    if (found) {
-      switch (msg.op) {
-        case Operation::PUT: {
-          auto& kvs = msg.kvs;
-          CHECK(!kvs.keys.empty());
-          CHECK_EQ(kvs.keys.size(), kvs.values.size());
-          for (size_t i = 0; i < kvs.keys.size(); i++) {
-            auto key = kvs.keys[i];
-            storage_[key] = kvs.values[i];
-          }
-          // PUT does not send response back
-          break;
-        }
-        case Operation::GET: {
-          auto& kvs = msg.kvs;
-          Endpoint* endpoint = msg.endpoint;
-          CHECK(!kvs.keys.empty());
-          CHECK(kvs.lens.empty());
-          CHECK(kvs.values.empty());
-          for (size_t i = 0; i < kvs.keys.size(); i++) {
-            auto key = kvs.keys[i];
-            auto value = storage_[key];
-            kvs.lens.push_back(value->bytes());
-            kvs.values.push_back(value);
-          }
-          // GET sends back the msg to the tx_queue of the endpoint
-          endpoint->tx_queue().Push(std::move(msg));
-          endpoint->NotifyWork();
-          break;
-        }
-        case Operation::DELETE: {
-          LOG(WARNING) << "DELETE hasn't been implemented.";
-          break;
-        }
-        default: {
-          LOG(WARNING) << "Unrecognized operation: " << msg.op << " from "
-                       << msg.endpoint->GetPeerAddr().AddrStr();
-        }
+using namespace server;
+
+void KVServerTcp::ProcessMsg(Message& msg, Endpoint* endpoint) {
+  // This function may have many concurrent callers
+  switch (msg.op) {
+    case Operation::PUT: {
+      auto& kvs = msg.kvs;
+      CHECK(!kvs.keys.empty());
+      CHECK_EQ(kvs.keys.size(), kvs.values.size());
+      std::lock_guard<std::mutex> lk(mu_);
+      for (size_t i = 0; i < kvs.keys.size(); i++) {
+        auto key = kvs.keys[i];
+        storage_[key] = kvs.values[i];
       }
+      // PUT does not send response back
+      break;
+    }
+    case Operation::GET: {
+      auto& kvs = msg.kvs;
+      CHECK(!kvs.keys.empty());
+      CHECK(kvs.lens.empty());
+      CHECK(kvs.values.empty());
+      auto num_keys = kvs.keys.size();
+      kvs.lens.reserve(num_keys);
+      kvs.values.reserve(num_keys);
+      size_t i = 0;
+      for (std::lock_guard<std::mutex> lk(mu_); i < num_keys; i++) {
+        auto key = kvs.keys[i];
+        auto value = storage_[key];
+        kvs.lens.push_back(value->bytes());
+        kvs.values.push_back(value);
+      }
+      // GET sends back the msg to the tx_queue of the endpoint
+      endpoint->tx_queue().push(std::move(msg));
+      endpoint->NotifyWork();
+      endpoint->OnSendReady();
+      break;
+    }
+    case Operation::DELETE: {
+      LOG(WARNING) << "DELETE hasn't been implemented.";
+      break;
+    }
+    default: {
+      LOG(WARNING) << "Unrecognized operation: " << msg.op << " from "
+                   << endpoint->GetPeerAddr().AddrStr();
     }
   }
 }

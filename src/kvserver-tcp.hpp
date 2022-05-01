@@ -2,9 +2,6 @@
 #define DIALGA_KVSERVER_TCP_HPP_
 #include "dialga/kvstore.hpp"
 #include "dialga/sarray.hpp"
-#include "prism/thread_proto.h"
-#include "prism/spsc_queue.h"
-#include "dialga/internal/concurrentqueue.hpp"
 #include "./socket/socket.h"
 #include "./socket/buffer.h"
 #include "./socket/poll.h"
@@ -18,6 +15,8 @@
 
 namespace dialga {
 
+class KVServerTcp;
+
 namespace server {
 using namespace socket;
 
@@ -29,8 +28,6 @@ struct Message {
   Endpoint* endpoint;
   KVPairs kvs;
 };
-
-using WorkQueue = moodycamel::ConcurrentQueue<Message>;
 
 enum class TxStage {
   // NothingToSend doesn't mean the TxQueue is empty. It just means the current
@@ -49,23 +46,9 @@ enum class RxStage {
   Values = 4,
 };
 
-// class RxStage {
-//  public:
-//   enum { Meta = 1, Keys, Lens, Values } stage;
-//   // only be valid when stage == Values
-//   uint32_t value_index;
-//
-//   RxStage NextStage(Operation op) {
-//
-//     if (op == Operation::PUT) {
-//
-//     }
-//   }
-// };
-
 class Endpoint {
  public:
-  using TxQueue = prism::SpscQueue<Message>;
+  using TxQueue = std::queue<Message>;
 
   Endpoint(TcpSocket sock, ioworker::IoWorker<Endpoint>& io_worker);
 
@@ -80,23 +63,15 @@ class Endpoint {
   inline TcpSocket& sock() { return sock_; }
 
   inline TxQueue& tx_queue() { return tx_queue_; }
+  bool Overloaded();
 
   void NotifyWork();
 
-  WorkQueue& GetWorkQueue();
+  ::dialga::KVServerTcp* GetKVServer();
 
   SockAddr GetPeerAddr();
 
  private:
-  // /*! \brief receive meta */
-  // bool ReceiveMeta();
-  // /*! \brief receive keys */
-  // bool ReceiveKeys();
-  // /*! \brief receive the array of the lengths of the values */
-  // bool ReceiveLens();
-  // /*! \brief receive values */
-  // bool ReceiveValues();
-
   void PrepareNewReceive();
   void PrepareNewSend(const Message& msg);
 
@@ -133,6 +108,8 @@ class Endpoint {
 
 class KVServerTcp final : public KVServer {
  public:
+  friend class server::Endpoint;
+
   virtual ~KVServerTcp() {}
 
   int Init() override;
@@ -141,16 +118,13 @@ class KVServerTcp final : public KVServer {
 
   static int ExitHandler(int sig, void* app_ctx);
 
-  inline server::WorkQueue& work_queue() { return work_queue_; }
-
  private:
-  void MainLoop();
+  void ProcessMsg(server::Message& msg, server::Endpoint* endpoint);
 
-  std::atomic<bool> terminated_;
-  server::WorkQueue work_queue_;
   std::vector<std::unique_ptr<ioworker::IoWorker<server::Endpoint>>>
       io_workers_;
 
+  std::mutex mu_;
   std::unordered_map<Key, SArray<char>*> storage_;
 };
 
